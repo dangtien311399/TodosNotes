@@ -1,0 +1,70 @@
+<div class="page-header">
+  <h1>Users (<%= total %>)</h1>
+</div>
+
+<form class="search-bar" method="GET" action="/admin/users">
+  <input type="text" name="q" value="<%= q %>" placeholder="Tìm theo email...">
+  <select name="filter">
+    <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Tất cả</option>
+    <option value="active" <%= filter === 'active' ? 'selected' : '' %>>Đang hoạt động</option>
+    <option value="disabled" <%= filter === 'disabled' ? 'selected' : '' %>>Đã vô hiệu hóa</option>
+  </select>
+  <button type="submit" class="btn btn-primary">Lọc</button>
+</form>
+
+<% if (rows.length === 0) { %>
+  <div class="card empty-state">
+    <p>Không có user nào.</p>
+  </div>
+<% } else { %>
+  <table>
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Tên hiển thị</th>
+        <th>Timezone</th>
+        <th>Admin</th>
+        <th>Trạng thái</th>
+        <th>Tạo lúc</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows.forEach(u => { %>
+        <tr>
+          <td><%= u.email %></td>
+          <td><%= u.display_name || '—' %></td>
+          <td class="muted"><%= u.timezone %></td>
+          <td>
+            <% if (u.is_admin === 1) { %>
+              <span class="badge badge-warning">admin</span>
+            <% } else { %>
+              <span class="muted">—</span>
+            <% } %>
+          </td>
+          <td>
+            <% if (u.deleted_at) { %>
+              <span class="badge badge-danger">disabled</span>
+            <% } else { %>
+              <span class="badge badge-success">active</span>
+            <% } %>
+          </td>
+          <td class="muted"><%= u.created_at.slice(0, 10) %></td>
+          <td><a class="btn btn-sm" href="/admin/users/<%= u.id %>">Xem</a></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+
+  <% if (totalPages > 1) { %>
+    <div class="pagination">
+      <% for (let p = 1; p <= totalPages; p++) { %>
+        <% if (p === page) { %>
+          <span class="current"><%= p %></span>
+        <% } else { %>
+          <a href="/admin/users?page=<%= p %>&q=<%= encodeURIComponent(q) %>&filter=<%= filter %>"><%= p %></a>
+        <% } %>
+      <% } %>
+    </div>
+  <% } %>
+<% } %>

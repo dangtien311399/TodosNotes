@@ -1,0 +1,68 @@
+<div class="page-header">
+  <h1><%= user.email %></h1>
+  <div class="actions">
+    <a class="btn" href="/admin/users">← Quay lại</a>
+  </div>
+</div>
+
+<div class="detail-grid">
+  <div class="card">
+    <h2>Thông tin (read-only)</h2>
+    <dl class="kv">
+      <dt>ID</dt><dd><%= user.id %></dd>
+      <dt>Email</dt><dd><%= user.email %></dd>
+      <dt>Tên hiển thị</dt><dd><%= user.display_name || '—' %></dd>
+      <dt>Avatar URL</dt><dd><%= user.avatar_url || '—' %></dd>
+      <dt>Tạo lúc</dt><dd><%= user.created_at %></dd>
+      <dt>Cập nhật</dt><dd><%= user.updated_at %></dd>
+      <dt>Trạng thái</dt>
+      <dd>
+        <% if (user.deleted_at) { %>
+          <span class="badge badge-danger">disabled</span> · <%= user.deleted_at %>
+        <% } else { %>
+          <span class="badge badge-success">active</span>
+        <% } %>
+      </dd>
+    </dl>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Sửa thông tin</h2>
+      <form method="POST" action="/admin/users/<%= user.id %>/edit">
+        <label>
+          Timezone
+          <input type="text" name="timezone" value="<%= user.timezone %>" required>
+        </label>
+        <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
+          <input type="checkbox" name="is_admin" <%= user.is_admin === 1 ? 'checked' : '' %>>
+          Là admin
+        </label>
+        <button type="submit" class="btn btn-primary">Lưu</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Hành động</h2>
+      <% if (user.deleted_at) { %>
+        <form method="POST" action="/admin/users/<%= user.id %>/enable" class="btn-inline">
+          <button type="submit" class="btn btn-primary">Kích hoạt lại</button>
+        </form>
+      <% } else { %>
+        <form method="POST" action="/admin/users/<%= user.id %>/disable" class="btn-inline" onsubmit="return confirm('Vô hiệu hóa user này?')">
+          <button type="submit" class="btn btn-danger">Vô hiệu hóa</button>
+        </form>
+      <% } %>
+
+      <form method="POST" action="/admin/users/<%= user.id %>/reset-password" class="btn-inline" onsubmit="return confirm('Reset password user này? Mật khẩu cũ sẽ không dùng được nữa.')">
+        <button type="submit" class="btn">Reset password</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Liên kết</h2>
+      <p><a href="/admin/users/<%= user.id %>/devices">Devices đăng ký</a></p>
+      <p><a href="/admin/users/<%= user.id %>/content">Content (todos + notes)</a></p>
+    </div>
+  </div>
+</div>

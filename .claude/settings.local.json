@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /tmp/login.html -w \"%{http_code}\\\\n\" http://localhost:3000/admin/login)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /tmp/login-wrong.html -w \"%{http_code}\\\\n\" -X POST http://localhost:3000/admin/login -d \"username=admin&password=wrong\")",
+      "Bash(curl -s -c /tmp/admin-cookies.txt -o /dev/null -w \"%{http_code} %{redirect_url}\\\\n\" -X POST http://localhost:3000/admin/login -d \"username=admin&password=Admin@2026!\")",
+      "Bash(curl -v -c /tmp/admin-cookies.txt -o /dev/null -X POST http://localhost:3000/admin/login -d \"username=admin&password=Admin@2026!\")",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/dashboard.html -w \"%{http_code}\\\\n\" http://localhost:3000/admin)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/users.html -w \"%{http_code}\\\\n\" http://localhost:3000/admin/users)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/templates.html -w \"%{http_code}\\\\n\" http://localhost:3000/admin/system-templates)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/new-tpl.html -w \"%{http_code}\\\\n\" http://localhost:3000/admin/system-templates/new)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -L -o /tmp/created.html -w '%{http_code} %{url_effective}\\\\n' -X POST http://localhost:3000/admin/system-templates --data-urlencode 'title=Pre-flight Check' --data-urlencode 'description=Checklist trước khi bay' --data-urlencode icon=✈️ --data-urlencode category=Travel --data-urlencode 'items_text=- Kiểm tra passport *)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/detail2.html -w \"HTTP %{http_code}\\\\n\" \"http://localhost:3000/admin/system-templates/019e38f1-d55b-76f4-b91f-fab3b84b70b2\")",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/detail3.html \"http://localhost:3000/admin/system-templates/019e38f1-d55b-76f4-b91f-fab3b84b70b2\")",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/users.html http://localhost:3000/admin/users)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/tpls.html http://localhost:3000/admin/system-templates)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/user.html http://localhost:3000/admin/users/019e38f3-98b4-7514-86bb-da5ba28ba32f)",
+      "Bash(curl -s -b /tmp/admin-cookies.txt -o /tmp/dev.html -w 'HTTP %{http_code}\\\\n' http://localhost:3000/admin/users/019e38f3-98b4-7514-86bb-da5ba28ba32f/devices)"
+    ]
+  }
+}

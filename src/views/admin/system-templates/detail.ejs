@@ -1,0 +1,105 @@
+<div class="page-header">
+  <h1><%= template.title %></h1>
+  <div class="actions">
+    <a class="btn" href="/admin/system-templates">← Quay lại</a>
+    <% if (!template.deleted_at) { %>
+      <form method="POST" action="/admin/system-templates/<%= template.id %>/delete" class="btn-inline" onsubmit="return confirm('Xóa template này (soft-delete)?')">
+        <button type="submit" class="btn btn-danger">Xóa template</button>
+      </form>
+    <% } %>
+  </div>
+</div>
+
+<% if (template.deleted_at) { %>
+  <div class="flash flash-warning">Template này đã bị xóa lúc <code><%= template.deleted_at %></code>.</div>
+<% } %>
+
+<div class="detail-grid">
+  <div class="card">
+    <h2>Items (<%= items.length %>)</h2>
+    <% if (items.length === 0) { %>
+      <p class="muted">Chưa có item nào.</p>
+    <% } else { %>
+      <ul class="items-list">
+        <% items.forEach(it => { %>
+          <li>
+            <details>
+              <summary class="item-content">
+                <strong><%= it.position %>.</strong> <%= it.title %>
+                <% if (it.is_required === 0) { %><span class="badge">optional</span><% } %>
+                <% if (it.description) { %><br><span class="muted"><%= it.description %></span><% } %>
+              </summary>
+              <form method="POST" action="/admin/system-templates/<%= template.id %>/items/<%= it.id %>/edit" style="margin-top: 0.75rem;">
+                <label>Title <input type="text" name="title" value="<%= it.title %>" required maxlength="200"></label>
+                <label>Description <textarea name="description"><%= it.description || '' %></textarea></label>
+                <label style="display:flex; align-items:center; gap:0.5rem;">
+                  <input type="checkbox" name="is_required" <%= it.is_required === 1 ? 'checked' : '' %>>
+                  Bắt buộc
+                </label>
+                <div style="display:flex; gap:0.5rem;">
+                  <button type="submit" class="btn btn-sm btn-primary">Lưu item</button>
+                </div>
+              </form>
+              <form method="POST" action="/admin/system-templates/<%= template.id %>/items/<%= it.id %>/delete" style="margin-top: 0.5rem;" onsubmit="return confirm('Xóa item này?')">
+                <button type="submit" class="btn btn-sm btn-danger">Xóa item</button>
+              </form>
+            </details>
+          </li>
+        <% }); %>
+      </ul>
+    <% } %>
+
+    <h2 style="margin-top: 1.5rem;">Thêm item mới</h2>
+    <form method="POST" action="/admin/system-templates/<%= template.id %>/items">
+      <label>
+        Title
+        <input type="text" name="title" required maxlength="200">
+      </label>
+      <label>
+        Description
+        <textarea name="description"></textarea>
+      </label>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <input type="checkbox" name="is_required" checked>
+        Bắt buộc
+      </label>
+      <button type="submit" class="btn btn-primary">+ Thêm item</button>
+    </form>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Sửa thông tin template</h2>
+      <form method="POST" action="/admin/system-templates/<%= template.id %>/edit">
+        <label>
+          Tiêu đề
+          <input type="text" name="title" value="<%= template.title %>" required maxlength="200">
+        </label>
+        <label>
+          Mô tả
+          <textarea name="description"><%= template.description || '' %></textarea>
+        </label>
+        <label>
+          Icon
+          <input type="text" name="icon" value="<%= template.icon || '' %>" maxlength="20">
+        </label>
+        <label>
+          Category
+          <input type="text" name="category" value="<%= template.category || '' %>" maxlength="64">
+        </label>
+        <button type="submit" class="btn btn-primary">Lưu</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Thông tin</h2>
+      <dl class="kv">
+        <dt>ID</dt><dd><%= template.id %></dd>
+        <dt>Times used</dt><dd><%= template.times_used %></dd>
+        <dt>Tạo lúc</dt><dd><%= template.created_at %></dd>
+        <dt>Cập nhật</dt><dd><%= template.updated_at %></dd>
+        <dt>Last used</dt><dd><%= template.last_used_at || '—' %></dd>
+      </dl>
+    </div>
+  </div>
+</div>

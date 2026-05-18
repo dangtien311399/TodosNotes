@@ -1,0 +1,51 @@
+<div class="page-header">
+  <h1>Devices · <%= user.email %></h1>
+  <div class="actions">
+    <a class="btn" href="/admin/users/<%= user.id %>">← User detail</a>
+  </div>
+</div>
+
+<% if (rows.length === 0) { %>
+  <div class="card empty-state">
+    <p>User chưa đăng ký device nào.</p>
+  </div>
+<% } else { %>
+  <table>
+    <thead>
+      <tr>
+        <th>Device</th>
+        <th>Platform</th>
+        <th>Push token</th>
+        <th>Last sync</th>
+        <th>Last seen</th>
+        <th>Tạo lúc</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows.forEach(d => { %>
+        <tr>
+          <td><%= d.device_name || '—' %></td>
+          <td><span class="badge"><%= d.platform %></span></td>
+          <td>
+            <% if (d.push_token) { %>
+              <span class="muted"><%= d.push_token.slice(0, 12) %>…</span>
+            <% } else { %>
+              <span class="badge badge-warning">revoked</span>
+            <% } %>
+          </td>
+          <td class="muted"><%= d.last_sync_at ? d.last_sync_at.slice(0, 19).replace('T', ' ') : '—' %></td>
+          <td class="muted"><%= d.last_seen_at ? d.last_seen_at.slice(0, 19).replace('T', ' ') : '—' %></td>
+          <td class="muted"><%= d.created_at.slice(0, 10) %></td>
+          <td>
+            <% if (d.push_token) { %>
+              <form method="POST" action="/admin/devices/<%= d.id %>/revoke" onsubmit="return confirm('Thu hồi push_token của device này?')">
+                <button type="submit" class="btn btn-sm btn-danger">Revoke</button>
+              </form>
+            <% } %>
+          </td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>

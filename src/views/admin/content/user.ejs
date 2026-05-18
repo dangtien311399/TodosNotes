@@ -1,0 +1,96 @@
+<div class="page-header">
+  <h1>Content · <%= user.email %></h1>
+  <div class="actions">
+    <a class="btn" href="/admin/users/<%= user.id %>">← User detail</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Todos (<%= todos.length %>)</h2>
+  <% if (todos.length === 0) { %>
+    <p class="muted">Không có todo nào.</p>
+  <% } else { %>
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Frog</th>
+          <th>Due</th>
+          <th>Created</th>
+          <th>Deleted</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% todos.forEach(t => { %>
+          <tr>
+            <td><%= t.title %></td>
+            <td><span class="badge"><%= t.status %></span></td>
+            <td><%= t.is_frog === 1 ? '🐸' : '' %></td>
+            <td class="muted"><%= t.due_at ? t.due_at.slice(0, 10) : '—' %></td>
+            <td class="muted"><%= t.created_at.slice(0, 10) %></td>
+            <td>
+              <% if (t.deleted_at) { %>
+                <span class="badge badge-danger">deleted</span>
+              <% } else { %>
+                <span class="badge badge-success">active</span>
+              <% } %>
+            </td>
+            <td>
+              <% if (!t.deleted_at) { %>
+                <form method="POST" action="/admin/todos/<%= t.id %>/delete" onsubmit="return confirm('Xóa todo này (soft-delete)?')">
+                  <button type="submit" class="btn btn-sm btn-danger">Xóa</button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</div>
+
+<div class="card">
+  <h2>Notes (<%= notes.length %>)</h2>
+  <% if (notes.length === 0) { %>
+    <p class="muted">Không có note nào.</p>
+  <% } else { %>
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Type</th>
+          <th>Pinned</th>
+          <th>Created</th>
+          <th>Deleted</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% notes.forEach(n => { %>
+          <tr>
+            <td><%= n.title %></td>
+            <td><span class="badge"><%= n.type %></span></td>
+            <td><%= n.is_pinned === 1 ? '📌' : '' %></td>
+            <td class="muted"><%= n.created_at.slice(0, 10) %></td>
+            <td>
+              <% if (n.deleted_at) { %>
+                <span class="badge badge-danger">deleted</span>
+              <% } else { %>
+                <span class="badge badge-success">active</span>
+              <% } %>
+            </td>
+            <td>
+              <% if (!n.deleted_at) { %>
+                <form method="POST" action="/admin/notes/<%= n.id %>/delete" onsubmit="return confirm('Xóa note này (soft-delete)?')">
+                  <button type="submit" class="btn btn-sm btn-danger">Xóa</button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</div>

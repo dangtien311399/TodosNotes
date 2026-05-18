@@ -1,0 +1,52 @@
+<div class="page-header">
+  <h1>System Templates (<%= rows.length %>)</h1>
+  <div class="actions">
+    <a class="btn btn-primary" href="/admin/system-templates/new">+ Tạo mới</a>
+  </div>
+</div>
+
+<form class="search-bar" method="GET" action="/admin/system-templates">
+  <select name="filter">
+    <option value="active" <%= filter === 'active' ? 'selected' : '' %>>Đang dùng</option>
+    <option value="deleted" <%= filter === 'deleted' ? 'selected' : '' %>>Đã xóa</option>
+    <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Tất cả</option>
+  </select>
+  <button type="submit" class="btn">Lọc</button>
+</form>
+
+<% if (rows.length === 0) { %>
+  <div class="card empty-state">
+    <p>Chưa có system template nào.</p>
+  </div>
+<% } else { %>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Category</th>
+        <th>Times used</th>
+        <th>Trạng thái</th>
+        <th>Tạo lúc</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows.forEach(t => { %>
+        <tr>
+          <td><strong><%= t.title %></strong><% if (t.description) { %><br><span class="muted"><%= t.description %></span><% } %></td>
+          <td class="muted"><%= t.category || '—' %></td>
+          <td class="muted"><%= t.times_used %></td>
+          <td>
+            <% if (t.deleted_at) { %>
+              <span class="badge badge-danger">deleted</span>
+            <% } else { %>
+              <span class="badge badge-success">active</span>
+            <% } %>
+          </td>
+          <td class="muted"><%= t.created_at.slice(0, 10) %></td>
+          <td><a class="btn btn-sm" href="/admin/system-templates/<%= t.id %>">Xem</a></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đăng nhập admin — Todo Note</title>
+  <link rel="stylesheet" href="/public/admin.css">
+</head>
+<body class="login-page">
+  <div class="login-box">
+    <h1>Đăng nhập Admin</h1>
+    <% if (typeof error !== 'undefined' && error) { %>
+      <div class="flash flash-error"><%= error %></div>
+    <% } %>
+    <form method="POST" action="/admin/login" autocomplete="off">
+      <label>
+        Tài khoản
+        <input type="text" name="username" required autofocus>
+      </label>
+      <label>
+        Mật khẩu
+        <input type="password" name="password" required>
+      </label>
+      <button type="submit" class="btn btn-primary">Đăng nhập</button>
+    </form>
+  </div>
+</body>
+</html>

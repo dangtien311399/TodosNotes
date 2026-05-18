@@ -1,0 +1,39 @@
+<div class="page-header">
+  <h1>Tạo System Template</h1>
+  <div class="actions">
+    <a class="btn" href="/admin/system-templates">← Quay lại</a>
+  </div>
+</div>
+
+<% if (formError) { %>
+  <div class="flash flash-error"><%= formError %></div>
+<% } %>
+
+<div class="card">
+  <form method="POST" action="/admin/system-templates">
+    <label>
+      Tiêu đề <span style="color:#dc2626">*</span>
+      <input type="text" name="title" required maxlength="200" placeholder="Pre-flight Check">
+    </label>
+    <label>
+      Mô tả
+      <textarea name="description" placeholder="Mô tả mục đích template..."></textarea>
+    </label>
+    <div class="form-row">
+      <label>
+        Icon (emoji hoặc text)
+        <input type="text" name="icon" maxlength="20" placeholder="✈️">
+      </label>
+      <label>
+        Category
+        <input type="text" name="category" maxlength="64" placeholder="Travel">
+      </label>
+    </div>
+    <label>
+      Danh sách item (mỗi dòng = 1 bước, hỗ trợ prefix "- ", "* ", "1. ")
+      <textarea name="items_text" rows="10" placeholder="- Kiểm tra passport&#10;- Đặt phòng khách sạn&#10;- Đổi tiền"></textarea>
+    </label>
+    <p class="muted">Items mặc định bắt buộc. Có thể chỉnh sửa từng item sau khi tạo.</p>
+    <button type="submit" class="btn btn-primary">Tạo template</button>
+  </form>
+</div>
