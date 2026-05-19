@@ -203,3 +203,245 @@ export const deleteItem = async (id: string): Promise<void> => {
     args: [id],
   });
 };
+
+// ============================================================
+// Mobile API — user-scoped templates (system + own union)
+// ============================================================
+
+export const listTemplatesForUser = async (
+  userId: string,
+  opts: { scope: "system" | "own" | "all"; category?: string }
+): Promise<TemplateRow[]> => {
+  const where: string[] = ["deleted_at IS NULL"];
+  const args: (string | number)[] = [];
+
+  if (opts.scope === "system") {
+    where.push("is_system = 1");
+  } else if (opts.scope === "own") {
+    where.push("is_system = 0 AND user_id = ?");
+    args.push(userId);
+  } else {
+    where.push("(is_system = 1 OR (is_system = 0 AND user_id = ?))");
+    args.push(userId);
+  }
+  if (opts.category !== undefined) {
+    where.push("category = ?");
+    args.push(opts.category);
+  }
+  const sql = `SELECT * FROM checklist_templates
+               WHERE ${where.join(" AND ")}
+               ORDER BY is_system DESC, times_used DESC, created_at DESC`;
+  const res = await turso.execute({ sql, args });
+  return (res.rows as unknown as Record<string, unknown>[]).map(mapTemplate);
+};
+
+export const getTemplateForUser = async (
+  id: string,
+  userId: string
+): Promise<TemplateRow | null> => {
+  const res = await turso.execute({
+    sql: `SELECT * FROM checklist_templates
+          WHERE id = ? AND deleted_at IS NULL
+            AND (is_system = 1 OR (is_system = 0 AND user_id = ?))`,
+    args: [id, userId],
+  });
+  if (res.rows.length === 0) return null;
+  return mapTemplate(res.rows[0] as unknown as Record<string, unknown>);
+};
+
+export const createUserTemplate = async (
+  userId: string,
+  input: CreateTemplateInput
+): Promise<string> => {
+  const templateId = newId();
+  const now = nowISO();
+
+  const stmts: { sql: string; args: (string | number | null)[] }[] = [
+    {
+      sql: `INSERT INTO checklist_templates
+            (id, user_id, title, description, icon, category, times_used, is_system, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+      args: [
+        templateId,
+        userId,
+        input.title,
+        input.description ?? null,
+        input.icon ?? null,
+        input.category ?? null,
+        now,
+        now,
+      ],
+    },
+    ...input.items.map((it, idx) => ({
+      sql: `INSERT INTO checklist_template_items
+            (id, template_id, position, title, description, is_required, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        newId(),
+        templateId,
+        idx + 1,
+        it.title,
+        it.description ?? null,
+        it.is_required,
+        now,
+        now,
+      ] as (string | number | null)[],
+    })),
+  ];
+
+  await turso.batch(stmts, "write");
+  return templateId;
+};
+
+export const updateUserTemplate = async (
+  id: string,
+  userId: string,
+  patch: { title?: string; description?: string | null; icon?: string | null; category?: string | null }
+): Promise<boolean> => {
+  const sets: string[] = [];
+  const args: (string | number | null)[] = [];
+  if (patch.title !== undefined) { sets.push("title = ?"); args.push(patch.title); }
+  if (patch.description !== undefined) { sets.push("description = ?"); args.push(patch.description); }
+  if (patch.icon !== undefined) { sets.push("icon = ?"); args.push(patch.icon); }
+  if (patch.category !== undefined) { sets.push("category = ?"); args.push(patch.category); }
+  if (sets.length === 0) return true;
+  sets.push("updated_at = ?");
+  args.push(nowISO());
+  args.push(id, userId);
+  const res = await turso.execute({
+    sql: `UPDATE checklist_templates SET ${sets.join(", ")}
+          WHERE id = ? AND user_id = ? AND is_system = 0 AND deleted_at IS NULL`,
+    args,
+  });
+  return res.rowsAffected > 0;
+};
+
+export const softDeleteUserTemplate = async (
+  id: string,
+  userId: string
+): Promise<boolean> => {
+  const now = nowISO();
+  const res = await turso.execute({
+    sql: `UPDATE checklist_templates
+          SET deleted_at = ?, updated_at = ?
+          WHERE id = ? AND user_id = ? AND is_system = 0 AND deleted_at IS NULL`,
+    args: [now, now, id, userId],
+  });
+  return res.rowsAffected > 0;
+};
+
+const userTemplateGuardSql =
+  "id IN (SELECT id FROM checklist_templates WHERE user_id = ? AND is_system = 0 AND deleted_at IS NULL)";
+
+export const addItemUserScoped = async (
+  templateId: string,
+  userId: string,
+  input: { title: string; description?: string | null; is_required: number }
+): Promise<string | null> => {
+  // Verify template thuộc user và lấy next position
+  const tpl = await turso.execute({
+    sql: `SELECT 1 FROM checklist_templates
+          WHERE id = ? AND user_id = ? AND is_system = 0 AND deleted_at IS NULL`,
+    args: [templateId, userId],
+  });
+  if (tpl.rows.length === 0) return null;
+
+  const maxRes = await turso.execute({
+    sql: "SELECT COALESCE(MAX(position), 0) AS m FROM checklist_template_items WHERE template_id = ?",
+    args: [templateId],
+  });
+  const nextPos = Number((maxRes.rows[0] as Record<string, unknown>).m) + 1;
+  const itemId = newId();
+  const now = nowISO();
+  await turso.execute({
+    sql: `INSERT INTO checklist_template_items
+          (id, template_id, position, title, description, is_required, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      itemId,
+      templateId,
+      nextPos,
+      input.title,
+      input.description ?? null,
+      input.is_required,
+      now,
+      now,
+    ],
+  });
+  return itemId;
+};
+
+export const updateItemUserScoped = async (
+  itemId: string,
+  templateId: string,
+  userId: string,
+  patch: { title?: string; description?: string | null; is_required?: number }
+): Promise<boolean> => {
+  const sets: string[] = [];
+  const args: (string | number | null)[] = [];
+  if (patch.title !== undefined) { sets.push("title = ?"); args.push(patch.title); }
+  if (patch.description !== undefined) { sets.push("description = ?"); args.push(patch.description); }
+  if (patch.is_required !== undefined) { sets.push("is_required = ?"); args.push(patch.is_required); }
+  if (sets.length === 0) return true;
+  sets.push("updated_at = ?");
+  args.push(nowISO());
+  args.push(itemId, templateId, userId);
+  const res = await turso.execute({
+    sql: `UPDATE checklist_template_items
+          SET ${sets.join(", ")}
+          WHERE id = ? AND template_id = ?
+            AND template_id IN (
+              SELECT id FROM checklist_templates
+              WHERE user_id = ? AND is_system = 0 AND deleted_at IS NULL
+            )`,
+    args,
+  });
+  return res.rowsAffected > 0;
+};
+
+export const deleteItemUserScoped = async (
+  itemId: string,
+  templateId: string,
+  userId: string
+): Promise<boolean> => {
+  const res = await turso.execute({
+    sql: `DELETE FROM checklist_template_items
+          WHERE id = ? AND template_id = ?
+            AND template_id IN (
+              SELECT id FROM checklist_templates
+              WHERE user_id = ? AND is_system = 0 AND deleted_at IS NULL
+            )`,
+    args: [itemId, templateId, userId],
+  });
+  return res.rowsAffected > 0;
+};
+
+export const reorderItemsUserScoped = async (
+  templateId: string,
+  userId: string,
+  itemIds: string[]
+): Promise<boolean> => {
+  const tpl = await turso.execute({
+    sql: `SELECT 1 FROM checklist_templates
+          WHERE id = ? AND user_id = ? AND is_system = 0 AND deleted_at IS NULL`,
+    args: [templateId, userId],
+  });
+  if (tpl.rows.length === 0) return false;
+  // Verify mọi item thuộc template
+  const placeholders = itemIds.map(() => "?").join(", ");
+  const check = await turso.execute({
+    sql: `SELECT COUNT(*) AS c FROM checklist_template_items
+          WHERE template_id = ? AND id IN (${placeholders})`,
+    args: [templateId, ...itemIds],
+  });
+  if (Number((check.rows[0] as Record<string, unknown>).c) !== itemIds.length) {
+    return false;
+  }
+  const now = nowISO();
+  const stmts = itemIds.map((id, idx) => ({
+    sql: "UPDATE checklist_template_items SET position = ?, updated_at = ? WHERE id = ?",
+    args: [idx + 1, now, id] as (string | number)[],
+  }));
+  await turso.batch(stmts, "write");
+  return true;
+};

@@ -1,0 +1,145 @@
+import { turso } from "../config/db.js";
+
+export type DayTodoStat = {
+  id: string;
+  title: string;
+  status: string;
+  scheduled_date: string | null;
+  is_important: number | null;
+  is_urgent: number | null;
+  is_frog: number;
+  frog_date: string | null;
+};
+
+const mapStat = (row: Record<string, unknown>): DayTodoStat => ({
+  id: row.id as string,
+  title: row.title as string,
+  status: row.status as string,
+  scheduled_date: (row.scheduled_date as string | null) ?? null,
+  is_important: row.is_important === null ? null : Number(row.is_important),
+  is_urgent: row.is_urgent === null ? null : Number(row.is_urgent),
+  is_frog: Number(row.is_frog),
+  frog_date: (row.frog_date as string | null) ?? null,
+});
+
+// Top-level todos của ngày D (cho dashboard today + eisenhower)
+export const listDayTopLevelStats = async (
+  userId: string,
+  date: string
+): Promise<DayTodoStat[]> => {
+  const res = await turso.execute({
+    sql: `SELECT id, title, status, scheduled_date, is_important, is_urgent, is_frog, frog_date
+          FROM todos
+          WHERE user_id = ? AND scheduled_date = ?
+            AND parent_id IS NULL
+            AND status != 'archived'
+            AND deleted_at IS NULL`,
+    args: [userId, date],
+  });
+  return (res.rows as unknown as Record<string, unknown>[]).map(mapStat);
+};
+
+// Habits active trong ngày D + log của ngày D
+export const countDayHabits = async (
+  userId: string,
+  date: string
+): Promise<{ total: number; completed: number }> => {
+  const res = await turso.execute({
+    sql: `SELECT
+            COUNT(DISTINCT h.id) AS total,
+            COUNT(DISTINCT CASE WHEN l.completed = 1 THEN h.id END) AS completed
+          FROM habits h
+          LEFT JOIN habit_logs l ON l.habit_id = h.id AND l.log_date = ?
+          WHERE h.user_id = ?
+            AND h.deleted_at IS NULL
+            AND h.is_archived = 0
+            AND h.start_date <= ?
+            AND (h.end_date IS NULL OR h.end_date >= ?)`,
+    args: [date, userId, date, date],
+  });
+  const row = res.rows[0] as unknown as Record<string, unknown>;
+  return {
+    total: Number(row.total),
+    completed: Number(row.completed),
+  };
+};
+
+export const getFrogForDay = async (
+  userId: string,
+  date: string
+): Promise<{ id: string; title: string; status: string } | null> => {
+  const res = await turso.execute({
+    sql: `SELECT id, title, status FROM todos
+          WHERE user_id = ? AND is_frog = 1 AND frog_date = ?
+            AND parent_id IS NULL AND deleted_at IS NULL
+          ORDER BY position ASC LIMIT 1`,
+    args: [userId, date],
+  });
+  if (res.rows.length === 0) return null;
+  const r = res.rows[0] as unknown as Record<string, unknown>;
+  return {
+    id: r.id as string,
+    title: r.title as string,
+    status: r.status as string,
+  };
+};
+
+// Range queries (cho calendar overview)
+export const rawTodosInRange = async (
+  userId: string,
+  from: string,
+  to: string
+): Promise<DayTodoStat[]> => {
+  const res = await turso.execute({
+    sql: `SELECT id, title, status, scheduled_date, is_important, is_urgent, is_frog, frog_date
+          FROM todos
+          WHERE user_id = ? AND scheduled_date BETWEEN ? AND ?
+            AND parent_id IS NULL
+            AND status != 'archived'
+            AND deleted_at IS NULL`,
+    args: [userId, from, to],
+  });
+  return (res.rows as unknown as Record<string, unknown>[]).map(mapStat);
+};
+
+export const activeHabitsInRange = async (
+  userId: string,
+  from: string,
+  to: string
+): Promise<{ id: string; start_date: string; end_date: string | null }[]> => {
+  const res = await turso.execute({
+    sql: `SELECT id, start_date, end_date FROM habits
+          WHERE user_id = ?
+            AND deleted_at IS NULL
+            AND is_archived = 0
+            AND start_date <= ?
+            AND (end_date IS NULL OR end_date >= ?)`,
+    args: [userId, to, from],
+  });
+  return (res.rows as unknown as Record<string, unknown>[]).map((r) => ({
+    id: r.id as string,
+    start_date: r.start_date as string,
+    end_date: (r.end_date as string | null) ?? null,
+  }));
+};
+
+export const allLogsInRange = async (
+  userId: string,
+  from: string,
+  to: string
+): Promise<{ habit_id: string; log_date: string; completed: number }[]> => {
+  const res = await turso.execute({
+    sql: `SELECT l.habit_id, l.log_date, l.completed
+          FROM habit_logs l
+          JOIN habits h ON h.id = l.habit_id
+          WHERE h.user_id = ?
+            AND h.deleted_at IS NULL
+            AND l.log_date BETWEEN ? AND ?`,
+    args: [userId, from, to],
+  });
+  return (res.rows as unknown as Record<string, unknown>[]).map((r) => ({
+    habit_id: r.habit_id as string,
+    log_date: r.log_date as string,
+    completed: Number(r.completed),
+  }));
+};
