@@ -10,6 +10,9 @@ export type RunRow = {
   status: "in_progress" | "completed" | "abandoned";
   started_at: string;
   completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 export type RunItemRow = {
@@ -19,6 +22,9 @@ export type RunItemRow = {
   status: "pending" | "done" | "skipped";
   completed_at: string | null;
   note: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 export type RunItemDetail = RunItemRow & {
@@ -29,7 +35,7 @@ export type RunItemDetail = RunItemRow & {
 };
 
 const RUN_COLUMNS =
-  "id, template_id, user_id, name, status, started_at, completed_at";
+  "id, template_id, user_id, name, status, started_at, completed_at, created_at, updated_at, deleted_at";
 
 const mapRun = (row: Record<string, unknown>): RunRow => ({
   id: row.id as string,
@@ -39,6 +45,9 @@ const mapRun = (row: Record<string, unknown>): RunRow => ({
   status: row.status as RunRow["status"],
   started_at: row.started_at as string,
   completed_at: (row.completed_at as string | null) ?? null,
+  created_at: (row.created_at as string | null) ?? (row.started_at as string),
+  updated_at: (row.updated_at as string | null) ?? (row.started_at as string),
+  deleted_at: (row.deleted_at as string | null) ?? null,
 });
 
 export class RunRepoError extends Error {
@@ -79,15 +88,15 @@ export const startRun = async (
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO checklist_runs
-            (id, template_id, user_id, name, status, started_at)
-            VALUES (?, ?, ?, ?, 'in_progress', ?)`,
-      args: [runId, templateId, userId, name, now],
+            (id, template_id, user_id, name, status, started_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?)`,
+      args: [runId, templateId, userId, name, now, now, now],
     },
     ...itemIds.map((tplItemId) => ({
       sql: `INSERT INTO checklist_run_items
-            (id, run_id, template_item_id, status)
-            VALUES (?, ?, ?, 'pending')`,
-      args: [newId(), runId, tplItemId] as (string | number | null)[],
+            (id, run_id, template_item_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', ?, ?)`,
+      args: [newId(), runId, tplItemId, now, now] as (string | number | null)[],
     })),
     {
       sql: `UPDATE checklist_templates
@@ -110,7 +119,7 @@ export const getRunById = async (
   userId: string
 ): Promise<RunRow | null> => {
   const res = await turso.execute({
-    sql: `SELECT ${RUN_COLUMNS} FROM checklist_runs WHERE id = ? AND user_id = ?`,
+    sql: `SELECT ${RUN_COLUMNS} FROM checklist_runs WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
     args: [id, userId],
   });
   if (res.rows.length === 0) return null;
@@ -120,10 +129,11 @@ export const getRunById = async (
 export const listRunItems = async (runId: string): Promise<RunItemDetail[]> => {
   const res = await turso.execute({
     sql: `SELECT ri.id, ri.run_id, ri.template_item_id, ri.status, ri.completed_at, ri.note,
+                 ri.created_at, ri.updated_at, ri.deleted_at,
                  ti.title, ti.description, ti.is_required, ti.position
           FROM checklist_run_items ri
           JOIN checklist_template_items ti ON ti.id = ri.template_item_id
-          WHERE ri.run_id = ?
+          WHERE ri.run_id = ? AND ri.deleted_at IS NULL
           ORDER BY ti.position ASC`,
     args: [runId],
   });
@@ -134,6 +144,9 @@ export const listRunItems = async (runId: string): Promise<RunItemDetail[]> => {
     status: r.status as RunItemDetail["status"],
     completed_at: (r.completed_at as string | null) ?? null,
     note: (r.note as string | null) ?? null,
+    created_at: (r.created_at as string | null) ?? "",
+    updated_at: (r.updated_at as string | null) ?? "",
+    deleted_at: (r.deleted_at as string | null) ?? null,
     title: r.title as string,
     description: (r.description as string | null) ?? null,
     is_required: Number(r.is_required),
@@ -164,7 +177,7 @@ export const listRunsByUser = async (
   userId: string,
   opts: ListRunsOpts
 ): Promise<{ rows: RunRow[]; nextCursor: string | null }> => {
-  const where: string[] = ["user_id = ?"];
+  const where: string[] = ["user_id = ?", "deleted_at IS NULL"];
   const args: (string | number)[] = [userId];
   if (opts.status) {
     where.push("status = ?");
@@ -205,19 +218,21 @@ export const updateRunItem = async (
   userId: string,
   patch: { status: RunItemRow["status"]; note?: string | null }
 ): Promise<boolean> => {
-  const completedAt = patch.status === "done" ? nowISO() : null;
+  const now = nowISO();
+  const completedAt = patch.status === "done" ? now : null;
   const args: (string | number | null)[] = [
     patch.status,
     patch.note ?? null,
     completedAt,
+    now,
     runItemId,
     userId,
   ];
   const res = await turso.execute({
     sql: `UPDATE checklist_run_items
-          SET status = ?, note = ?, completed_at = ?
-          WHERE id = ?
-            AND run_id IN (SELECT id FROM checklist_runs WHERE user_id = ?)`,
+          SET status = ?, note = ?, completed_at = ?, updated_at = ?
+          WHERE id = ? AND deleted_at IS NULL
+            AND run_id IN (SELECT id FROM checklist_runs WHERE user_id = ? AND deleted_at IS NULL)`,
     args,
   });
   return res.rowsAffected > 0;
@@ -243,9 +258,9 @@ export const completeRun = async (
   if (pendingRequired > 0) throw new RunRepoError("incomplete_required");
   const now = nowISO();
   await turso.execute({
-    sql: `UPDATE checklist_runs SET status = 'completed', completed_at = ?
+    sql: `UPDATE checklist_runs SET status = 'completed', completed_at = ?, updated_at = ?
           WHERE id = ? AND user_id = ?`,
-    args: [now, id, userId],
+    args: [now, now, id, userId],
   });
   return true;
 };
@@ -256,9 +271,9 @@ export const abandonRun = async (
 ): Promise<boolean> => {
   const now = nowISO();
   const res = await turso.execute({
-    sql: `UPDATE checklist_runs SET status = 'abandoned', completed_at = ?
-          WHERE id = ? AND user_id = ? AND status = 'in_progress'`,
-    args: [now, id, userId],
+    sql: `UPDATE checklist_runs SET status = 'abandoned', completed_at = ?, updated_at = ?
+          WHERE id = ? AND user_id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+    args: [now, now, id, userId],
   });
   return res.rowsAffected > 0;
 };
@@ -267,9 +282,24 @@ export const deleteRun = async (
   id: string,
   userId: string
 ): Promise<boolean> => {
-  const res = await turso.execute({
-    sql: "DELETE FROM checklist_runs WHERE id = ? AND user_id = ?",
-    args: [id, userId],
-  });
-  return res.rowsAffected > 0;
+  const now = nowISO();
+  // §7.2 Cascade: soft-delete run → soft-delete run_items trong cùng transaction
+  const res = await turso.batch(
+    [
+      {
+        sql: `UPDATE checklist_runs
+              SET deleted_at = ?, updated_at = ?
+              WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+        args: [now, now, id, userId],
+      },
+      {
+        sql: `UPDATE checklist_run_items
+              SET deleted_at = ?, updated_at = ?
+              WHERE run_id = ? AND deleted_at IS NULL`,
+        args: [now, now, id],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };

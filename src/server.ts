@@ -12,9 +12,7 @@ import apiRoutes from "./routes/api/v1/index.js";
 const app: FastifyInstance = Fastify({
   logger: {
     transport:
-      env.NODE_ENV !== "production"
-        ? { target: "pino-pretty" }
-        : undefined,
+      env.NODE_ENV !== "production" ? { target: "pino-pretty" } : undefined,
   },
 });
 
@@ -33,6 +31,28 @@ await app.register(helmet, {
 });
 await app.register(cors, { origin: true });
 await app.register(sensible);
+
+// ── Custom JSON body parser ────────────────────────────────────────────────────
+// Fastify 5 throws FST_ERR_CTP_EMPTY_JSON_BODY when Content-Type: application/json
+// is sent with no body (Flutter sends this header on every request including DELETE).
+// Override the default parser to treat an empty body as undefined instead of 400.
+app.addContentTypeParser(
+  "application/json",
+  { parseAs: "string" },
+  (req, body, done) => {
+    if (!body || (body as string).trim() === "") {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (err) {
+      const e = err as Error & { statusCode?: number };
+      e.statusCode = 400;
+      done(e, undefined);
+    }
+  }
+);
 
 // View + static + formbody
 await app.register(viewPlugin);

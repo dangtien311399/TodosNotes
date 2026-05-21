@@ -29,6 +29,8 @@ export type HabitLogRow = {
   completed: number;
   note: string | null;
   created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 const HABIT_COLUMNS =
@@ -36,7 +38,7 @@ const HABIT_COLUMNS =
   "active_weekdays, start_date, end_date, current_streak, longest_streak, is_archived, " +
   "created_at, updated_at, deleted_at";
 
-const LOG_COLUMNS = "id, habit_id, log_date, completed, note, created_at";
+const LOG_COLUMNS = "id, habit_id, log_date, completed, note, created_at, updated_at, deleted_at";
 
 const mapHabit = (row: Record<string, unknown>): HabitRow => ({
   id: row.id as string,
@@ -65,6 +67,8 @@ const mapLog = (row: Record<string, unknown>): HabitLogRow => ({
   completed: Number(row.completed),
   note: (row.note as string | null) ?? null,
   created_at: row.created_at as string,
+  updated_at: (row.updated_at as string | null) ?? (row.created_at as string),
+  deleted_at: (row.deleted_at as string | null) ?? null,
 });
 
 export class HabitRepoError extends Error {
@@ -199,12 +203,23 @@ export const softDeleteHabit = async (
   userId: string
 ): Promise<boolean> => {
   const now = nowISO();
-  const res = await turso.execute({
-    sql: `UPDATE habits SET deleted_at = ?, updated_at = ?
-          WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-    args: [now, now, id, userId],
-  });
-  return res.rowsAffected > 0;
+  // §7.2 Cascade soft-delete: habit → habit_logs trong cùng transaction
+  const res = await turso.batch(
+    [
+      {
+        sql: `UPDATE habits SET deleted_at = ?, updated_at = ?
+              WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+        args: [now, now, id, userId],
+      },
+      {
+        sql: `UPDATE habit_logs SET deleted_at = ?, updated_at = ?
+              WHERE habit_id = ? AND deleted_at IS NULL`,
+        args: [now, now, id],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };
 
 export const listHabitsByUser = async (
@@ -233,13 +248,17 @@ export const upsertLog = async (
   note: string | null
 ): Promise<HabitLogRow> => {
   const now = nowISO();
+  // §3.5 Resurrect: nếu row dead (deleted_at != NULL) → dọn sạch và ghi lại
+  // ON CONFLICT luôn set updated_at = now và deleted_at = NULL (resurrect)
   await turso.execute({
-    sql: `INSERT INTO habit_logs (id, habit_id, log_date, completed, note, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
+    sql: `INSERT INTO habit_logs (id, habit_id, log_date, completed, note, created_at, updated_at, deleted_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
           ON CONFLICT(habit_id, log_date) DO UPDATE SET
             completed = excluded.completed,
-            note = excluded.note`,
-    args: [newId(), habitId, logDate, completed ? 1 : 0, note, now],
+            note = excluded.note,
+            updated_at = excluded.updated_at,
+            deleted_at = NULL`,
+    args: [newId(), habitId, logDate, completed ? 1 : 0, note, now, now],
   });
   const row = await getLog(habitId, logDate);
   if (!row) throw new Error("upsertLog: row missing");
@@ -251,7 +270,8 @@ export const getLog = async (
   logDate: string
 ): Promise<HabitLogRow | null> => {
   const res = await turso.execute({
-    sql: `SELECT ${LOG_COLUMNS} FROM habit_logs WHERE habit_id = ? AND log_date = ?`,
+    sql: `SELECT ${LOG_COLUMNS} FROM habit_logs
+          WHERE habit_id = ? AND log_date = ? AND deleted_at IS NULL`,
     args: [habitId, logDate],
   });
   if (res.rows.length === 0) return null;
@@ -262,9 +282,11 @@ export const deleteLog = async (
   habitId: string,
   logDate: string
 ): Promise<boolean> => {
+  const now = nowISO();
   const res = await turso.execute({
-    sql: "DELETE FROM habit_logs WHERE habit_id = ? AND log_date = ?",
-    args: [habitId, logDate],
+    sql: `UPDATE habit_logs SET deleted_at = ?, updated_at = ?
+          WHERE habit_id = ? AND log_date = ? AND deleted_at IS NULL`,
+    args: [now, now, habitId, logDate],
   });
   return res.rowsAffected > 0;
 };
@@ -276,7 +298,7 @@ export const listLogsInRange = async (
 ): Promise<HabitLogRow[]> => {
   const res = await turso.execute({
     sql: `SELECT ${LOG_COLUMNS} FROM habit_logs
-          WHERE habit_id = ? AND log_date BETWEEN ? AND ?
+          WHERE habit_id = ? AND log_date BETWEEN ? AND ? AND deleted_at IS NULL
           ORDER BY log_date ASC`,
     args: [habitId, from, to],
   });
@@ -289,7 +311,7 @@ export const listRecentLogs = async (
 ): Promise<HabitLogRow[]> => {
   const res = await turso.execute({
     sql: `SELECT ${LOG_COLUMNS} FROM habit_logs
-          WHERE habit_id = ?
+          WHERE habit_id = ? AND deleted_at IS NULL
           ORDER BY log_date DESC
           LIMIT ?`,
     args: [habitId, limit],
@@ -303,11 +325,13 @@ export const listAllLogsInRange = async (
   to: string
 ): Promise<HabitLogRow[]> => {
   const res = await turso.execute({
-    sql: `SELECT l.${LOG_COLUMNS.replaceAll(", ", ", l.")}
+    sql: `SELECT l.id, l.habit_id, l.log_date, l.completed, l.note,
+                 l.created_at, l.updated_at, l.deleted_at
           FROM habit_logs l
           JOIN habits h ON h.id = l.habit_id
           WHERE h.user_id = ?
             AND h.deleted_at IS NULL
+            AND l.deleted_at IS NULL
             AND l.log_date BETWEEN ? AND ?
           ORDER BY l.log_date ASC`,
     args: [userId, from, to],
@@ -323,7 +347,7 @@ export const recomputeStreaks = async (
   habitId: string
 ): Promise<{ current: number; longest: number }> => {
   const res = await turso.execute({
-    sql: "SELECT log_date, completed FROM habit_logs WHERE habit_id = ? ORDER BY log_date ASC",
+    sql: "SELECT log_date, completed FROM habit_logs WHERE habit_id = ? AND deleted_at IS NULL ORDER BY log_date ASC",
     args: [habitId],
   });
   const logs = (res.rows as unknown as Record<string, unknown>[]).map((r) => ({

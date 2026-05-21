@@ -322,17 +322,29 @@ export const addNoteLink = async (
   const id = newId();
   const now = nowISO();
   try {
-    const res = await turso.execute({
-      sql: `INSERT INTO note_links (id, source_note_id, target_note_id, label, created_at)
-            SELECT ?, s.id, t.id, ?, ?
-            FROM notes s, notes t
+    // Verify ownership với SELECT trước
+    const check = await turso.execute({
+      sql: `SELECT s.id FROM notes s, notes t
             WHERE s.id = ? AND s.user_id = ? AND s.deleted_at IS NULL
               AND t.id = ? AND t.user_id = ? AND t.deleted_at IS NULL`,
-      args: [id, label, now, sourceId, userId, targetId, userId],
+      args: [sourceId, userId, targetId, userId],
     });
-    if (res.rowsAffected === 0) {
-      throw new RepoError("not_found");
-    }
+    if (check.rows.length === 0) throw new RepoError("not_found");
+
+    await turso.batch(
+      [
+        {
+          sql: `INSERT INTO note_links (id, source_note_id, target_note_id, label, created_at)
+                VALUES (?, ?, ?, ?, ?)`,
+          args: [id, sourceId, targetId, label, now],
+        },
+        {
+          sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+          args: [now, sourceId],
+        },
+      ],
+      "write"
+    );
   } catch (e) {
     if (e instanceof RepoError) throw e;
     if (isUniqueViolation(e)) throw new RepoError("duplicate");
@@ -346,13 +358,28 @@ export const removeNoteLink = async (
   targetId: string,
   userId: string
 ): Promise<boolean> => {
-  const res = await turso.execute({
-    sql: `DELETE FROM note_links
-          WHERE source_note_id = ? AND target_note_id = ?
-            AND source_note_id IN (SELECT id FROM notes WHERE user_id = ?)`,
-    args: [sourceId, targetId, userId],
+  const now = nowISO();
+  // Verify ownership
+  const check = await turso.execute({
+    sql: "SELECT id FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [sourceId, userId],
   });
-  return res.rowsAffected > 0;
+  if (check.rows.length === 0) return false;
+
+  const res = await turso.batch(
+    [
+      {
+        sql: "DELETE FROM note_links WHERE source_note_id = ? AND target_note_id = ?",
+        args: [sourceId, targetId],
+      },
+      {
+        sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+        args: [now, sourceId],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };
 
 export const listOutgoingLinks = async (
@@ -432,15 +459,28 @@ export const addNoteTodoLink = async (
   const id = newId();
   const now = nowISO();
   try {
-    const res = await turso.execute({
-      sql: `INSERT INTO note_todo_links (id, note_id, todo_id, created_at)
-            SELECT ?, n.id, t.id, ?
-            FROM notes n, todos t
+    // Verify ownership
+    const check = await turso.execute({
+      sql: `SELECT n.id FROM notes n, todos t
             WHERE n.id = ? AND n.user_id = ? AND n.deleted_at IS NULL
               AND t.id = ? AND t.user_id = ? AND t.deleted_at IS NULL`,
-      args: [id, now, noteId, userId, todoId, userId],
+      args: [noteId, userId, todoId, userId],
     });
-    if (res.rowsAffected === 0) throw new RepoError("not_found");
+    if (check.rows.length === 0) throw new RepoError("not_found");
+
+    await turso.batch(
+      [
+        {
+          sql: "INSERT INTO note_todo_links (id, note_id, todo_id, created_at) VALUES (?, ?, ?, ?)",
+          args: [id, noteId, todoId, now],
+        },
+        {
+          sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+          args: [now, noteId],
+        },
+      ],
+      "write"
+    );
   } catch (e) {
     if (e instanceof RepoError) throw e;
     if (isUniqueViolation(e)) throw new RepoError("duplicate");
@@ -454,13 +494,28 @@ export const removeNoteTodoLink = async (
   todoId: string,
   userId: string
 ): Promise<boolean> => {
-  const res = await turso.execute({
-    sql: `DELETE FROM note_todo_links
-          WHERE note_id = ? AND todo_id = ?
-            AND note_id IN (SELECT id FROM notes WHERE user_id = ?)`,
-    args: [noteId, todoId, userId],
+  const now = nowISO();
+  // Verify ownership
+  const check = await turso.execute({
+    sql: "SELECT id FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [noteId, userId],
   });
-  return res.rowsAffected > 0;
+  if (check.rows.length === 0) return false;
+
+  const res = await turso.batch(
+    [
+      {
+        sql: "DELETE FROM note_todo_links WHERE note_id = ? AND todo_id = ?",
+        args: [noteId, todoId],
+      },
+      {
+        sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+        args: [now, noteId],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };
 
 export const listLinkedTodos = async (
@@ -494,16 +549,30 @@ export const attachTagToNote = async (
   tagId: string,
   userId: string
 ): Promise<boolean> => {
+  const now = nowISO();
   try {
-    const res = await turso.execute({
-      sql: `INSERT INTO note_tags (note_id, tag_id)
-            SELECT n.id, g.id
-            FROM notes n, tags g
+    // Verify ownership
+    const check = await turso.execute({
+      sql: `SELECT n.id FROM notes n, tags g
             WHERE n.id = ? AND n.user_id = ? AND n.deleted_at IS NULL
               AND g.id = ? AND g.user_id = ? AND g.deleted_at IS NULL`,
       args: [noteId, userId, tagId, userId],
     });
-    if (res.rowsAffected === 0) throw new RepoError("not_found");
+    if (check.rows.length === 0) throw new RepoError("not_found");
+
+    await turso.batch(
+      [
+        {
+          sql: "INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)",
+          args: [noteId, tagId],
+        },
+        {
+          sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+          args: [now, noteId],
+        },
+      ],
+      "write"
+    );
     return true;
   } catch (e) {
     if (e instanceof RepoError) throw e;
@@ -517,13 +586,28 @@ export const detachTagFromNote = async (
   tagId: string,
   userId: string
 ): Promise<boolean> => {
-  const res = await turso.execute({
-    sql: `DELETE FROM note_tags
-          WHERE note_id = ? AND tag_id = ?
-            AND note_id IN (SELECT id FROM notes WHERE user_id = ?)`,
-    args: [noteId, tagId, userId],
+  const now = nowISO();
+  // Verify ownership
+  const check = await turso.execute({
+    sql: "SELECT id FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [noteId, userId],
   });
-  return res.rowsAffected > 0;
+  if (check.rows.length === 0) return false;
+
+  const res = await turso.batch(
+    [
+      {
+        sql: "DELETE FROM note_tags WHERE note_id = ? AND tag_id = ?",
+        args: [noteId, tagId],
+      },
+      {
+        sql: "UPDATE notes SET updated_at = ? WHERE id = ?",
+        args: [now, noteId],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };
 
 export const listNoteTags = async (noteId: string): Promise<TagRow[]> => {

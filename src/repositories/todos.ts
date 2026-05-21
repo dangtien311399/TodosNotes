@@ -407,17 +407,42 @@ export const uncompleteTodo = async (
 };
 
 // Overload: userId tùy chọn (admin web không cần truyền)
+// §7.2 Cascade: soft-delete todo → soft-delete mọi subtask đệ quy (parent_id tree)
 export const softDeleteTodo = async (
   id: string,
   userId?: string
 ): Promise<boolean> => {
   const now = nowISO();
-  const sql = userId
-    ? "UPDATE todos SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
-    : "UPDATE todos SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL";
-  const args = userId ? [now, now, id, userId] : [now, now, id];
-  const res = await turso.execute({ sql, args });
-  return res.rowsAffected > 0;
+
+  // Verify target tồn tại + thuộc user (nếu có userId scope)
+  const checkSql = userId
+    ? "SELECT id FROM todos WHERE id = ? AND user_id = ? AND deleted_at IS NULL"
+    : "SELECT id FROM todos WHERE id = ? AND deleted_at IS NULL";
+  const checkArgs = userId ? [id, userId] : [id];
+  const check = await turso.execute({ sql: checkSql, args: checkArgs });
+  if (check.rows.length === 0) return false;
+
+  // Thu thập toàn bộ ids trong cây con bằng WITH RECURSIVE (libSQL/SQLite 3.8+)
+  const treeRes = await turso.execute({
+    sql: `WITH RECURSIVE subtree(id) AS (
+            SELECT id FROM todos WHERE id = ? AND deleted_at IS NULL
+            UNION ALL
+            SELECT t.id FROM todos t
+            INNER JOIN subtree p ON t.parent_id = p.id
+            WHERE t.deleted_at IS NULL
+          )
+          SELECT id FROM subtree`,
+    args: [id],
+  });
+  const allIds = (treeRes.rows as unknown as { id: string }[]).map((r) => r.id);
+
+  // Batch soft-delete tất cả trong 1 transaction
+  const stmts = allIds.map((tid) => ({
+    sql: "UPDATE todos SET deleted_at = ?, updated_at = ? WHERE id = ?",
+    args: [now, now, tid] as (string | null)[],
+  }));
+  await turso.batch(stmts, "write");
+  return true;
 };
 
 export const markFrog = async (
@@ -640,16 +665,31 @@ export const attachTagToTodo = async (
   tagId: string,
   userId: string
 ): Promise<boolean> => {
+  const now = nowISO();
   try {
-    const res = await turso.execute({
-      sql: `INSERT INTO todo_tags (todo_id, tag_id)
-            SELECT t.id, g.id
-            FROM todos t, tags g
+    // Verify ownership bằng SELECT trước
+    const check = await turso.execute({
+      sql: `SELECT t.id FROM todos t, tags g
             WHERE t.id = ? AND t.user_id = ? AND t.deleted_at IS NULL
               AND g.id = ? AND g.user_id = ? AND g.deleted_at IS NULL`,
       args: [todoId, userId, tagId, userId],
     });
-    if (res.rowsAffected === 0) throw new TodoRepoError("not_found");
+    if (check.rows.length === 0) throw new TodoRepoError("not_found");
+
+    // INSERT junction + bump parent updated_at trong 1 batch
+    await turso.batch(
+      [
+        {
+          sql: "INSERT INTO todo_tags (todo_id, tag_id) VALUES (?, ?)",
+          args: [todoId, tagId],
+        },
+        {
+          sql: "UPDATE todos SET updated_at = ? WHERE id = ?",
+          args: [now, todoId],
+        },
+      ],
+      "write"
+    );
     return true;
   } catch (e) {
     if (e instanceof TodoRepoError) throw e;
@@ -663,13 +703,28 @@ export const detachTagFromTodo = async (
   tagId: string,
   userId: string
 ): Promise<boolean> => {
-  const res = await turso.execute({
-    sql: `DELETE FROM todo_tags
-          WHERE todo_id = ? AND tag_id = ?
-            AND todo_id IN (SELECT id FROM todos WHERE user_id = ?)`,
-    args: [todoId, tagId, userId],
+  const now = nowISO();
+  // Verify ownership
+  const check = await turso.execute({
+    sql: "SELECT id FROM todos WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [todoId, userId],
   });
-  return res.rowsAffected > 0;
+  if (check.rows.length === 0) return false;
+
+  const res = await turso.batch(
+    [
+      {
+        sql: "DELETE FROM todo_tags WHERE todo_id = ? AND tag_id = ?",
+        args: [todoId, tagId],
+      },
+      {
+        sql: "UPDATE todos SET updated_at = ? WHERE id = ?",
+        args: [now, todoId],
+      },
+    ],
+    "write"
+  );
+  return (res[0].rowsAffected ?? 0) > 0;
 };
 
 export const listTodoTags = async (todoId: string): Promise<TagRow[]> => {

@@ -9,6 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "db:migrate": "tsx src/scripts/migrate.ts",
+    "db:clean-test": "tsx src/scripts/clean-test-data.ts",
     "admin:hash": "tsx src/scripts/hash-password.ts"
   },
   "repository": {
