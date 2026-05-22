@@ -3,6 +3,12 @@ import { z } from "zod";
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 const IsoDT = z.iso.datetime();
 
+// ── Recurrence helpers ────────────────────────────────────────────────────────
+// Weekday string: comma-separated 1–7 (Mon=1 … Sun=7), e.g. '1,3,5'
+const ActiveWeekdaysStr = z
+  .string()
+  .regex(/^[1-7](,[1-7])*$/, "Expected comma-separated weekdays 1-7, e.g. '1,3,5'");
+
 export const CreateTodoSchema = z.object({
   title: z.string().trim().min(1).max(500),
   description: z.string().max(10_000).optional(),
@@ -19,6 +25,12 @@ export const CreateTodoSchema = z.object({
   trigger_after_todo_id: z.uuid().nullable().optional(),
   position: z.number().int().min(0).optional(),
   tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+  // ── Recurrence (migration 0006) ─────────────────────────────────────────────
+  recurrence_type: z.enum(["daily", "weekly", "custom"]).nullable().optional(),
+  recurrence_interval: z.number().int().min(1).max(365).optional(),
+  recurrence_days_of_week: ActiveWeekdaysStr.nullable().optional(),
+  recurrence_end_date: IsoDate.nullable().optional(),
+  recurrence_template_id: z.uuid().nullable().optional(),
 });
 export type CreateTodoInput = z.infer<typeof CreateTodoSchema>;
 

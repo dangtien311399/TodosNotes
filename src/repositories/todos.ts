@@ -22,6 +22,12 @@ export type TodoRow = {
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
   completed_at: string | null;
+  // Recurrence fields (migration 0006)
+  recurrence_type: "daily" | "weekly" | "custom" | null;
+  recurrence_interval: number;
+  recurrence_days_of_week: string | null;
+  recurrence_end_date: string | null;
+  recurrence_template_id: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -31,7 +37,10 @@ const TODO_COLUMNS =
   "id, user_id, parent_id, title, description, status, position, " +
   "is_frog, frog_date, is_important, is_urgent, " +
   "estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, " +
-  "trigger_after_todo_id, completed_at, created_at, updated_at, deleted_at";
+  "trigger_after_todo_id, completed_at, " +
+  "recurrence_type, recurrence_interval, recurrence_days_of_week, " +
+  "recurrence_end_date, recurrence_template_id, " +
+  "created_at, updated_at, deleted_at";
 
 const nullableNum = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v);
@@ -55,6 +64,11 @@ const mapRow = (row: Record<string, unknown>): TodoRow => ({
   scheduled_date: (row.scheduled_date as string | null) ?? null,
   trigger_after_todo_id: (row.trigger_after_todo_id as string | null) ?? null,
   completed_at: (row.completed_at as string | null) ?? null,
+  recurrence_type: (row.recurrence_type as TodoRow["recurrence_type"]) ?? null,
+  recurrence_interval: row.recurrence_interval != null ? Number(row.recurrence_interval) : 1,
+  recurrence_days_of_week: (row.recurrence_days_of_week as string | null) ?? null,
+  recurrence_end_date: (row.recurrence_end_date as string | null) ?? null,
+  recurrence_template_id: (row.recurrence_template_id as string | null) ?? null,
   created_at: row.created_at as string,
   updated_at: row.updated_at as string,
   deleted_at: (row.deleted_at as string | null) ?? null,
@@ -200,6 +214,12 @@ export type CreateTodoInput = {
   due_at?: string | null;
   trigger_after_todo_id?: string | null;
   position?: number;
+  // Recurrence (migration 0006)
+  recurrence_type?: TodoRow["recurrence_type"];
+  recurrence_interval?: number;
+  recurrence_days_of_week?: string | null;
+  recurrence_end_date?: string | null;
+  recurrence_template_id?: string | null;
 };
 
 const boolToInt = (v: boolean | null | undefined): number | null => {
@@ -248,8 +268,11 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
           (id, user_id, parent_id, title, description, status, position,
            is_frog, frog_date, is_important, is_urgent,
            estimated_minutes, start_at, due_at, scheduled_date,
-           trigger_after_todo_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           trigger_after_todo_id,
+           recurrence_type, recurrence_interval, recurrence_days_of_week,
+           recurrence_end_date, recurrence_template_id,
+           created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id,
       input.user_id,
@@ -267,6 +290,11 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
       input.due_at ?? null,
       input.scheduled_date ?? null,
       input.trigger_after_todo_id ?? null,
+      input.recurrence_type ?? null,
+      input.recurrence_interval ?? 1,
+      input.recurrence_days_of_week ?? null,
+      input.recurrence_end_date ?? null,
+      input.recurrence_template_id ?? null,
       now,
       now,
     ],
@@ -296,6 +324,12 @@ export type UpdateTodoPatch = Partial<{
   due_at: string | null;
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
+  // Recurrence (migration 0006)
+  recurrence_type: TodoRow["recurrence_type"];
+  recurrence_interval: number;
+  recurrence_days_of_week: string | null;
+  recurrence_end_date: string | null;
+  recurrence_template_id: string | null;
 }>;
 
 export const updateTodo = async (
@@ -349,6 +383,16 @@ export const updateTodo = async (
   if (patch.scheduled_date !== undefined) push("scheduled_date = ?", patch.scheduled_date);
   if (patch.trigger_after_todo_id !== undefined)
     push("trigger_after_todo_id = ?", patch.trigger_after_todo_id);
+  if (patch.recurrence_type !== undefined)
+    push("recurrence_type = ?", patch.recurrence_type);
+  if (patch.recurrence_interval !== undefined)
+    push("recurrence_interval = ?", patch.recurrence_interval);
+  if (patch.recurrence_days_of_week !== undefined)
+    push("recurrence_days_of_week = ?", patch.recurrence_days_of_week);
+  if (patch.recurrence_end_date !== undefined)
+    push("recurrence_end_date = ?", patch.recurrence_end_date);
+  if (patch.recurrence_template_id !== undefined)
+    push("recurrence_template_id = ?", patch.recurrence_template_id);
 
   if (sets.length === 0) return current;
 

@@ -54,6 +54,11 @@ export const createTodo = async (
       due_at: input.due_at ?? null,
       trigger_after_todo_id: input.trigger_after_todo_id ?? null,
       position: input.position,
+      recurrence_type: input.recurrence_type ?? null,
+      recurrence_interval: input.recurrence_interval,
+      recurrence_days_of_week: input.recurrence_days_of_week ?? null,
+      recurrence_end_date: input.recurrence_end_date ?? null,
+      recurrence_template_id: input.recurrence_template_id ?? null,
     });
   } catch (e) {
     return wrapRepo(e);

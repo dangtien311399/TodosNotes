@@ -57,6 +57,12 @@ export type SyncTodo = {
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
   completed_at: string | null;
+  // Recurrence fields (migration 0006)
+  recurrence_type: "daily" | "weekly" | "custom" | null;
+  recurrence_interval: number;
+  recurrence_days_of_week: string | null;
+  recurrence_end_date: string | null;
+  recurrence_template_id: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
