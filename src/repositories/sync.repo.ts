@@ -346,8 +346,10 @@ export const upsertEntity = async (
               (id, user_id, parent_id, title, description, status, position,
                is_frog, frog_date, is_important, is_urgent, estimated_minutes, actual_minutes,
                start_at, due_at, scheduled_date, trigger_after_todo_id, completed_at,
+               recurrence_type, recurrence_interval, recurrence_days_of_week,
+               recurrence_end_date, recurrence_template_id,
                created_at, updated_at, deleted_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 title = excluded.title,
@@ -365,6 +367,11 @@ export const upsertEntity = async (
                 scheduled_date = excluded.scheduled_date,
                 trigger_after_todo_id = excluded.trigger_after_todo_id,
                 completed_at = excluded.completed_at,
+                recurrence_type = excluded.recurrence_type,
+                recurrence_interval = excluded.recurrence_interval,
+                recurrence_days_of_week = excluded.recurrence_days_of_week,
+                recurrence_end_date = excluded.recurrence_end_date,
+                recurrence_template_id = excluded.recurrence_template_id,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at`,
         args: dbArgs([
@@ -375,6 +382,9 @@ export const upsertEntity = async (
           p.estimated_minutes ?? null, p.actual_minutes ?? null,
           p.start_at ?? null, p.due_at ?? null, p.scheduled_date ?? null,
           p.trigger_after_todo_id ?? null, p.completed_at ?? null,
+          p.recurrence_type ?? null, p.recurrence_interval ?? 1,
+          p.recurrence_days_of_week ?? null, p.recurrence_end_date ?? null,
+          p.recurrence_template_id ?? null,
           createdAt, updatedAt, deletedAt,
         ]),
       });

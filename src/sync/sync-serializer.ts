@@ -201,6 +201,10 @@ export type SyncUser = {
   deleted_at: string | null;
 };
 
+// ── Utilities ───────────────────────────────────────────────────────────────
+
+import { nowISO } from "../utils/time.js";
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** SQLite INTEGER 0/1 → boolean */
@@ -278,9 +282,14 @@ export function toSyncEntity(
     }
 
     case "habit_log": {
+      // Defensive: migration 0005 backfilled updated_at from created_at;
+      // if created_at was also NULL on an old row, both timestamps can be null.
+      const hl_now = nowISO();
       return {
         ...row,
         completed: toBool(row.completed),
+        created_at: (row.created_at as string | null) ?? hl_now,
+        updated_at: (row.updated_at as string | null) ?? hl_now,
       };
     }
 
@@ -292,9 +301,14 @@ export function toSyncEntity(
     }
 
     case "checklist_template_item": {
+      // Defensive: created_at/updated_at existed before 0005 but may be
+      // null on rows where the original INSERT omitted them (very old data).
+      const cti_now = nowISO();
       return {
         ...row,
         is_required: toBool(row.is_required),
+        created_at: (row.created_at as string | null) ?? cti_now,
+        updated_at: (row.updated_at as string | null) ?? cti_now,
       };
     }
 
@@ -309,7 +323,28 @@ export function toSyncEntity(
       };
     }
 
-    // tag, checklist_run, checklist_run_item: no bool fields → pass-through
+    case "checklist_run": {
+      // Defensive: created_at/updated_at added by migration 0005 and backfilled
+      // from started_at; NULL if started_at was also NULL on that old row.
+      const cr_now = nowISO();
+      return {
+        ...row,
+        created_at: (row.created_at as string | null) ?? cr_now,
+        updated_at: (row.updated_at as string | null) ?? cr_now,
+      };
+    }
+
+    case "checklist_run_item": {
+      // Same backfill chain as checklist_run — inherits the same NULL risk.
+      const cri_now = nowISO();
+      return {
+        ...row,
+        created_at: (row.created_at as string | null) ?? cri_now,
+        updated_at: (row.updated_at as string | null) ?? cri_now,
+      };
+    }
+
+    // tag: no bool fields, no nullable timestamps risk → plain pass-through
     default:
       return { ...row };
   }
