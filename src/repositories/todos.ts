@@ -24,7 +24,7 @@ export type TodoRow = {
   completed_at: string | null;
   // Recurrence fields (migration 0006)
   recurrence_type: "daily" | "weekly" | "custom" | null;
-  recurrence_interval: number;
+  recurrence_interval: number | null;
   recurrence_days_of_week: string | null;
   recurrence_end_date: string | null;
   recurrence_template_id: string | null;
@@ -65,7 +65,7 @@ const mapRow = (row: Record<string, unknown>): TodoRow => ({
   trigger_after_todo_id: (row.trigger_after_todo_id as string | null) ?? null,
   completed_at: (row.completed_at as string | null) ?? null,
   recurrence_type: (row.recurrence_type as TodoRow["recurrence_type"]) ?? null,
-  recurrence_interval: row.recurrence_interval != null ? Number(row.recurrence_interval) : 1,
+  recurrence_interval: nullableNum(row.recurrence_interval),
   recurrence_days_of_week: (row.recurrence_days_of_week as string | null) ?? null,
   recurrence_end_date: (row.recurrence_end_date as string | null) ?? null,
   recurrence_template_id: (row.recurrence_template_id as string | null) ?? null,
@@ -88,7 +88,6 @@ export class TodoRepoError extends Error {
   constructor(
     public code:
       | "not_found"
-      | "daily_limit_reached"
       | "invalid_parent"
       | "invalid_trigger"
       | "cycle"
@@ -97,8 +96,6 @@ export class TodoRepoError extends Error {
     super(code);
   }
 }
-
-const DAILY_LIMIT = 6;
 
 const isUniqueViolation = (e: unknown): boolean => {
   const msg = e instanceof Error ? e.message : String(e);
@@ -132,26 +129,8 @@ export const getTodoByIdScoped = async (
 };
 
 // ============================================================
-// Limit-6 check + ownership / cycle helpers
+// Ownership / cycle helpers
 // ============================================================
-
-const countTopLevelInDay = async (
-  userId: string,
-  date: string,
-  excludeId?: string
-): Promise<number> => {
-  const sql = excludeId
-    ? `SELECT COUNT(*) AS c FROM todos
-       WHERE user_id = ? AND scheduled_date = ?
-         AND parent_id IS NULL AND status != 'archived' AND deleted_at IS NULL
-         AND id != ?`
-    : `SELECT COUNT(*) AS c FROM todos
-       WHERE user_id = ? AND scheduled_date = ?
-         AND parent_id IS NULL AND status != 'archived' AND deleted_at IS NULL`;
-  const args = excludeId ? [userId, date, excludeId] : [userId, date];
-  const res = await turso.execute({ sql, args });
-  return Number((res.rows[0] as unknown as Record<string, unknown>).c);
-};
 
 const assertParentExistsForUser = async (
   parentId: string,
@@ -216,7 +195,7 @@ export type CreateTodoInput = {
   position?: number;
   // Recurrence (migration 0006)
   recurrence_type?: TodoRow["recurrence_type"];
-  recurrence_interval?: number;
+  recurrence_interval?: number | null;
   recurrence_days_of_week?: string | null;
   recurrence_end_date?: string | null;
   recurrence_template_id?: string | null;
@@ -233,11 +212,6 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
   }
   if (input.trigger_after_todo_id) {
     await assertTriggerExistsForUser(input.trigger_after_todo_id, input.user_id);
-  }
-  // Limit chỉ áp dụng cho top-level + có scheduled_date
-  if (!input.parent_id && input.scheduled_date) {
-    const c = await countTopLevelInDay(input.user_id, input.scheduled_date);
-    if (c >= DAILY_LIMIT) throw new TodoRepoError("daily_limit_reached");
   }
 
   // Auto position = MAX+1 trong cùng scope (same parent hoặc same scheduled_date top-level)
@@ -263,6 +237,12 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
 
   const id = newId();
   const now = nowISO();
+  const recurrenceInterval =
+    input.recurrence_interval !== undefined
+      ? input.recurrence_interval
+      : input.recurrence_type
+        ? 1
+        : null;
   await turso.execute({
     sql: `INSERT INTO todos
           (id, user_id, parent_id, title, description, status, position,
@@ -291,7 +271,7 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
       input.scheduled_date ?? null,
       input.trigger_after_todo_id ?? null,
       input.recurrence_type ?? null,
-      input.recurrence_interval ?? 1,
+      recurrenceInterval,
       input.recurrence_days_of_week ?? null,
       input.recurrence_end_date ?? null,
       input.recurrence_template_id ?? null,
@@ -326,7 +306,7 @@ export type UpdateTodoPatch = Partial<{
   trigger_after_todo_id: string | null;
   // Recurrence (migration 0006)
   recurrence_type: TodoRow["recurrence_type"];
-  recurrence_interval: number;
+  recurrence_interval: number | null;
   recurrence_days_of_week: string | null;
   recurrence_end_date: string | null;
   recurrence_template_id: string | null;
@@ -349,15 +329,6 @@ export const updateTodo = async (
   if (patch.trigger_after_todo_id !== undefined && patch.trigger_after_todo_id !== null) {
     if (patch.trigger_after_todo_id === id) throw new TodoRepoError("invalid_trigger");
     await assertTriggerExistsForUser(patch.trigger_after_todo_id, userId);
-  }
-
-  // Limit-6 nếu (sau update) là top-level + có scheduled_date đã đổi
-  const newParent = patch.parent_id !== undefined ? patch.parent_id : current.parent_id;
-  const newSched =
-    patch.scheduled_date !== undefined ? patch.scheduled_date : current.scheduled_date;
-  if (!newParent && newSched && newSched !== current.scheduled_date) {
-    const c = await countTopLevelInDay(userId, newSched, id);
-    if (c >= DAILY_LIMIT) throw new TodoRepoError("daily_limit_reached");
   }
 
   const sets: string[] = [];

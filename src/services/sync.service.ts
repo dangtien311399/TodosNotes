@@ -167,7 +167,9 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
     const delAt = (payload.deleted_at as string | undefined) ?? nowISO();
     await softDeleteEntity(type, id, delAt);
   } else {
-    await upsertEntity(userId, type, dbPayload);
+    await upsertEntity(userId, type, dbPayload, {
+      partialUpdate: opType === "update" && entityInfo !== null,
+    });
 
     // §5.4 Junction reconcile (todo / note only)
     // Skip entirely if all junction arrays are empty AND this is a create:

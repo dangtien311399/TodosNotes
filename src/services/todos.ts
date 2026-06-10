@@ -15,7 +15,6 @@ export class ServiceError extends Error {
   constructor(
     public code:
       | "not_found"
-      | "daily_limit_reached"
       | "invalid_parent"
       | "invalid_trigger"
       | "cycle"

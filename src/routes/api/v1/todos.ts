@@ -15,8 +15,6 @@ const mapErr = (e: unknown, reply: FastifyReply): FastifyReply => {
   if (e instanceof todos.ServiceError) {
     if (e.code === "not_found") return reply.code(404).send({ error: "not_found" });
     if (e.code === "duplicate") return reply.code(409).send({ error: "duplicate" });
-    if (e.code === "daily_limit_reached")
-      return reply.code(409).send({ error: "daily_limit_reached" });
     if (e.code === "cycle") return reply.code(409).send({ error: "cycle" });
     if (e.code === "invalid_parent")
       return reply.code(400).send({ error: "invalid_parent" });

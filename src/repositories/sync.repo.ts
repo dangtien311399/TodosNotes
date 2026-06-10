@@ -44,6 +44,59 @@ const inPlaceholders = (ids: string[]): string => ids.map(() => "?").join(", ");
 const dbArgs = (vals: unknown[]): (string | number | bigint | ArrayBuffer | null)[] =>
   vals as (string | number | bigint | ArrayBuffer | null)[];
 
+const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
+const syncTodoFields = [
+  "parent_id",
+  "title",
+  "description",
+  "status",
+  "position",
+  "is_frog",
+  "frog_date",
+  "is_important",
+  "is_urgent",
+  "estimated_minutes",
+  "actual_minutes",
+  "start_at",
+  "due_at",
+  "scheduled_date",
+  "trigger_after_todo_id",
+  "completed_at",
+  "recurrence_type",
+  "recurrence_interval",
+  "recurrence_days_of_week",
+  "recurrence_end_date",
+  "recurrence_template_id",
+  "deleted_at",
+] as const;
+
+const updateExistingTodoFromSync = async (
+  userId: string,
+  p: Record<string, unknown>
+): Promise<void> => {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+
+  for (const field of syncTodoFields) {
+    if (hasOwn(p, field)) {
+      sets.push(`${field} = ?`);
+      args.push(p[field] ?? null);
+    }
+  }
+
+  sets.push("updated_at = ?");
+  args.push((p.updated_at as string | null) ?? nowISO());
+  args.push(p.id, userId);
+
+  await turso.execute({
+    sql: `UPDATE todos SET ${sets.join(", ")}
+          WHERE id = ? AND user_id = ?`,
+    args: dbArgs(args),
+  });
+};
+
 // ── getChangesSince ──────────────────────────────────────────────────────────
 
 /**
@@ -331,7 +384,8 @@ export const getEntityUpdatedAt = async (
 export const upsertEntity = async (
   userId: string,
   type: EntityType,
-  dbPayload: Record<string, unknown>
+  dbPayload: Record<string, unknown>,
+  opts: { partialUpdate?: boolean } = {}
 ): Promise<void> => {
   const p = dbPayload;
   const now = nowISO();
@@ -341,6 +395,17 @@ export const upsertEntity = async (
 
   switch (type) {
     case "todo": {
+      if (opts.partialUpdate) {
+        await updateExistingTodoFromSync(userId, p);
+        break;
+      }
+
+      const recurrenceInterval = hasOwn(p, "recurrence_interval")
+        ? (p.recurrence_interval ?? null)
+        : p.recurrence_type
+          ? 1
+          : null;
+
       await turso.execute({
         sql: `INSERT INTO todos
               (id, user_id, parent_id, title, description, status, position,
@@ -382,7 +447,7 @@ export const upsertEntity = async (
           p.estimated_minutes ?? null, p.actual_minutes ?? null,
           p.start_at ?? null, p.due_at ?? null, p.scheduled_date ?? null,
           p.trigger_after_todo_id ?? null, p.completed_at ?? null,
-          p.recurrence_type ?? null, p.recurrence_interval ?? 1,
+          p.recurrence_type ?? null, recurrenceInterval,
           p.recurrence_days_of_week ?? null, p.recurrence_end_date ?? null,
           p.recurrence_template_id ?? null,
           createdAt, updatedAt, deletedAt,
@@ -717,20 +782,30 @@ export const reconcileJunctions = async (
   if (type !== "todo" && type !== "note") return; // only these have junctions
 
   if (type === "todo") {
-    const newTagIds = (syncPayload.tag_ids as string[] | undefined) ?? [];
-    await reconcileTodoTags(id, userId, newTagIds);
+    if (hasOwn(syncPayload, "tag_ids")) {
+      const newTagIds = (syncPayload.tag_ids as string[] | undefined) ?? [];
+      await reconcileTodoTags(id, userId, newTagIds);
+    }
   }
 
   if (type === "note") {
-    const newTagIds = (syncPayload.tag_ids as string[] | undefined) ?? [];
-    const newNoteLinks = (
-      syncPayload.note_links as { target_note_id: string; label?: string | null }[] | undefined
-    ) ?? [];
-    const newLinkedTodoIds = (syncPayload.linked_todo_ids as string[] | undefined) ?? [];
-
-    await reconcileNoteTags(id, userId, newTagIds);
-    await reconcileNoteLinks(id, userId, newNoteLinks);
-    await reconcileNoteTodoLinks(id, userId, newLinkedTodoIds);
+    if (hasOwn(syncPayload, "tag_ids")) {
+      const newTagIds = (syncPayload.tag_ids as string[] | undefined) ?? [];
+      await reconcileNoteTags(id, userId, newTagIds);
+    }
+    if (hasOwn(syncPayload, "note_links")) {
+      const newNoteLinks = (
+        syncPayload.note_links as
+          | { target_note_id: string; label?: string | null }[]
+          | undefined
+      ) ?? [];
+      await reconcileNoteLinks(id, userId, newNoteLinks);
+    }
+    if (hasOwn(syncPayload, "linked_todo_ids")) {
+      const newLinkedTodoIds =
+        (syncPayload.linked_todo_ids as string[] | undefined) ?? [];
+      await reconcileNoteTodoLinks(id, userId, newLinkedTodoIds);
+    }
   }
 };
 

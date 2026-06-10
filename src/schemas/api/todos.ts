@@ -2,6 +2,8 @@ import { z } from "zod";
 
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 const IsoDT = z.iso.datetime();
+const Minutes = z.number().int().min(0).max(10_000);
+const RecurrenceInterval = z.number().int().min(1).max(365);
 
 // ── Recurrence helpers ────────────────────────────────────────────────────────
 // Weekday string: comma-separated 1–7 (Mon=1 … Sun=7), e.g. '1,3,5'
@@ -19,7 +21,7 @@ export const CreateTodoSchema = z.object({
   frog_date: IsoDate.nullable().optional(),
   is_important: z.boolean().nullable().optional(),
   is_urgent: z.boolean().nullable().optional(),
-  estimated_minutes: z.number().int().min(0).max(10_000).optional(),
+  estimated_minutes: Minutes.nullable().optional(),
   start_at: IsoDT.nullable().optional(),
   due_at: IsoDT.nullable().optional(),
   trigger_after_todo_id: z.uuid().nullable().optional(),
@@ -27,14 +29,16 @@ export const CreateTodoSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   // ── Recurrence (migration 0006) ─────────────────────────────────────────────
   recurrence_type: z.enum(["daily", "weekly", "custom"]).nullable().optional(),
-  recurrence_interval: z.number().int().min(1).max(365).optional(),
+  recurrence_interval: RecurrenceInterval.nullable().optional(),
   recurrence_days_of_week: ActiveWeekdaysStr.nullable().optional(),
   recurrence_end_date: IsoDate.nullable().optional(),
   recurrence_template_id: z.uuid().nullable().optional(),
 });
 export type CreateTodoInput = z.infer<typeof CreateTodoSchema>;
 
-export const UpdateTodoSchema = CreateTodoSchema.partial().omit({ tags: true });
+export const UpdateTodoSchema = CreateTodoSchema.partial().omit({ tags: true }).extend({
+  actual_minutes: Minutes.nullable().optional(),
+});
 export type UpdateTodoInput = z.infer<typeof UpdateTodoSchema>;
 
 export const ListTodosQuerySchema = z.object({
@@ -50,7 +54,7 @@ export const ListTodosQuerySchema = z.object({
 export type ListTodosQueryInput = z.infer<typeof ListTodosQuerySchema>;
 
 export const CompleteTodoSchema = z.object({
-  actual_minutes: z.number().int().min(0).max(10_000).optional(),
+  actual_minutes: Minutes.nullable().optional(),
 });
 export type CompleteTodoInput = z.infer<typeof CompleteTodoSchema>;
 

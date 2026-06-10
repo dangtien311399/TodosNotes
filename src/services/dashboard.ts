@@ -10,15 +10,17 @@ import type {
 // Score formula (Eisenhower-weighted + frog bonus)
 // ============================================================
 
-const W = { Q1: 4, Q2: 3, Q3: 2, Q4: 1, NULL: 1, FROG_BONUS: 2 };
+const W = { Q1: 4, Q2: 3, Q3: 2, Q4: 1, FROG_BONUS: 2, HABIT: 0.5 };
 
-type Quadrant = "q1" | "q2" | "q3" | "q4" | "unclassified";
+type Quadrant = "q1" | "q2" | "q3" | "q4";
 
 const quadrantOf = (
   imp: number | null,
   urg: number | null
 ): Quadrant => {
-  if (imp === null || urg === null) return "unclassified";
+  // Dashboard/mobile contract is a strict 4-cell Eisenhower matrix.
+  // Old/unclassified rows are treated as Q4 instead of producing a fifth bucket.
+  if (imp === null || urg === null) return "q4";
   if (imp === 1 && urg === 1) return "q1";
   if (imp === 1 && urg === 0) return "q2";
   if (imp === 0 && urg === 1) return "q3";
@@ -35,8 +37,6 @@ const quadrantWeight = (imp: number | null, urg: number | null): number => {
       return W.Q3;
     case "q4":
       return W.Q4;
-    default:
-      return W.NULL;
   }
 };
 
@@ -44,7 +44,13 @@ const todoWeight = (t: dashRepo.DayTodoStat, date: string): number =>
   quadrantWeight(t.is_important, t.is_urgent) +
   (t.is_frog === 1 && t.frog_date === date ? W.FROG_BONUS : 0);
 
-const computeScore = (todos: dashRepo.DayTodoStat[], date: string): number => {
+type HabitScoreInput = { total: number; completed: number };
+
+const computeScore = (
+  todos: dashRepo.DayTodoStat[],
+  date: string,
+  habits: HabitScoreInput = { total: 0, completed: 0 }
+): number => {
   let total = 0;
   let done = 0;
   for (const t of todos) {
@@ -52,6 +58,8 @@ const computeScore = (todos: dashRepo.DayTodoStat[], date: string): number => {
     total += w;
     if (t.status === "done") done += w;
   }
+  total += habits.total * W.HABIT;
+  done += habits.completed * W.HABIT;
   return total > 0 ? Math.round((done / total) * 100) : 0;
 };
 
@@ -68,7 +76,6 @@ export type TodayStats = {
     q2: number;
     q3: number;
     q4: number;
-    unclassified: number;
   };
   habits_today: { total: number; completed: number };
   frog: { id: string; title: string; status: string } | null;
@@ -85,9 +92,9 @@ export const getTodayStats = async (
     dashRepo.getFrogForDay(userId, date),
   ]);
 
-  const score = computeScore(todos, date);
+  const score = computeScore(todos, date, habits);
 
-  const counts = { q1: 0, q2: 0, q3: 0, q4: 0, unclassified: 0 };
+  const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
   for (const t of todos) {
     if (t.status === "done") continue;
     counts[quadrantOf(t.is_important, t.is_urgent)]++;
@@ -110,12 +117,38 @@ export const getTodayStats = async (
 // GET /eisenhower
 // ============================================================
 
+export type EisenhowerTodo = {
+  id: string;
+  title: string;
+  status: string;
+  scheduled_date: string | null;
+  is_important: boolean;
+  is_urgent: boolean;
+  is_frog: boolean;
+  frog_date: string | null;
+  quadrant: Quadrant;
+};
+
 export type EisenhowerByQuadrant = {
-  q1: dashRepo.DayTodoStat[];
-  q2: dashRepo.DayTodoStat[];
-  q3: dashRepo.DayTodoStat[];
-  q4: dashRepo.DayTodoStat[];
-  unclassified: dashRepo.DayTodoStat[];
+  q1: EisenhowerTodo[];
+  q2: EisenhowerTodo[];
+  q3: EisenhowerTodo[];
+  q4: EisenhowerTodo[];
+};
+
+const toEisenhowerTodo = (t: dashRepo.DayTodoStat): EisenhowerTodo => {
+  const quadrant = quadrantOf(t.is_important, t.is_urgent);
+  return {
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    scheduled_date: t.scheduled_date,
+    is_important: t.is_important === 1,
+    is_urgent: t.is_urgent === 1,
+    is_frog: t.is_frog === 1,
+    frog_date: t.frog_date,
+    quadrant,
+  };
 };
 
 export const getEisenhower = async (
@@ -133,13 +166,12 @@ export const getEisenhower = async (
     q2: [],
     q3: [],
     q4: [],
-    unclassified: [],
   };
-  const counts = { q1: 0, q2: 0, q3: 0, q4: 0, unclassified: 0 };
+  const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
   for (const t of todos) {
     if (t.status === "done") continue;
     const q = quadrantOf(t.is_important, t.is_urgent);
-    by_quadrant[q].push(t);
+    by_quadrant[q].push(toEisenhowerTodo(t));
     counts[q]++;
   }
   return { date, counts, by_quadrant };
@@ -192,10 +224,6 @@ export const getCalendarOverview = async (
     days[t.scheduled_date].total_todos++;
     if (t.status === "done") days[t.scheduled_date].done_todos++;
   }
-  for (const [d, ts] of Object.entries(todosByDay)) {
-    if (d <= today) days[d].score = computeScore(ts, d);
-  }
-
   // Habits active per day
   for (const d of Object.keys(days)) {
     days[d].habits_total = habits.filter(
@@ -212,6 +240,15 @@ export const getCalendarOverview = async (
   }
   for (const [d, s] of Object.entries(completedByDay)) {
     if (days[d]) days[d].habits_completed = s.size;
+  }
+
+  for (const d of Object.keys(days)) {
+    if (d <= today) {
+      days[d].score = computeScore(todosByDay[d] ?? [], d, {
+        total: days[d].habits_total,
+        completed: days[d].habits_completed,
+      });
+    }
   }
 
   return { from: query.from, to: query.to, days };
