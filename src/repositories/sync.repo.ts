@@ -27,6 +27,7 @@ export type SyncChanges = {
   habit_logs: Record<string, unknown>[];
   checklist_categories: Record<string, unknown>[];
   checklist_templates: Record<string, unknown>[];
+  checklist_template_orders: Record<string, unknown>[];
   checklist_template_items: Record<string, unknown>[];
   checklist_runs: Record<string, unknown>[];
   checklist_run_items: Record<string, unknown>[];
@@ -120,7 +121,8 @@ export const getChangesSince = async (
   // on remote DBs (Turso: ~50 ms/query × 10 seq → 2 round-trips instead).
   const [
     usersRes, tagsRes, todosRes, notesRes,
-    habitsRes, habitLogsRes, categoriesRes, templatesRes, templateItemsRes,
+    habitsRes, habitLogsRes, categoriesRes, templatesRes, templateOrdersRes,
+    templateItemsRes,
     runsRes, runItemsRes,
   ] = await Promise.all([
     turso.execute({
@@ -183,10 +185,20 @@ export const getChangesSince = async (
       sql: isInitial
         ? `SELECT * FROM checklist_templates
            WHERE (user_id = ? OR is_system = 1) AND deleted_at IS NULL
-           ORDER BY is_system DESC, updated_at DESC`
+           ORDER BY sort_order ASC, updated_at DESC`
         : `SELECT * FROM checklist_templates
            WHERE (user_id = ? OR is_system = 1) AND updated_at > ?
-           ORDER BY is_system DESC, updated_at DESC`,
+           ORDER BY sort_order ASC, updated_at DESC`,
+      args: a1,
+    }),
+    turso.execute({
+      sql: isInitial
+        ? `SELECT * FROM checklist_template_orders
+           WHERE user_id = ? AND deleted_at IS NULL
+           ORDER BY sort_order ASC, updated_at DESC`
+        : `SELECT * FROM checklist_template_orders
+           WHERE user_id = ? AND updated_at > ?
+           ORDER BY sort_order ASC, updated_at DESC`,
       args: a1,
     }),
     turso.execute({
@@ -334,6 +346,9 @@ export const getChangesSince = async (
   const checklist_templates = (templatesRes.rows as unknown as Record<string, unknown>[]).map(
     (r) => toSyncEntity(r, "checklist_template")
   );
+  const checklist_template_orders = (
+    templateOrdersRes.rows as unknown as Record<string, unknown>[]
+  ).map((r) => toSyncEntity(r, "checklist_template_order"));
   const checklist_template_items = (
     templateItemsRes.rows as unknown as Record<string, unknown>[]
   ).map((r) => toSyncEntity(r, "checklist_template_item"));
@@ -353,6 +368,7 @@ export const getChangesSince = async (
     habit_logs,
     checklist_categories,
     checklist_templates,
+    checklist_template_orders,
     checklist_template_items,
     checklist_runs,
     checklist_run_items,
@@ -374,6 +390,7 @@ export const getEntityUpdatedAt = async (
     habit_log: "habit_logs",
     checklist_category: "checklist_categories",
     checklist_template: "checklist_templates",
+    checklist_template_order: "checklist_template_orders",
     checklist_template_item: "checklist_template_items",
     checklist_run: "checklist_runs",
     checklist_run_item: "checklist_run_items",
@@ -596,23 +613,69 @@ export const upsertEntity = async (
       await turso.execute({
         sql: `INSERT INTO checklist_templates
               (id, user_id, title, description, icon, category, category_id,
-               is_system, times_used, last_used_at,
+               sort_order, is_system, times_used, last_used_at,
                created_at, updated_at, deleted_at)
-              VALUES (?,?,?,?,?,?,?,0,0,NULL,?,?,?)
+              VALUES (?,?,?,?,?,?,?,?,0,0,NULL,?,?,?)
               ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 description = excluded.description,
                 icon = excluded.icon,
                 category = excluded.category,
                 category_id = excluded.category_id,
+                sort_order = excluded.sort_order,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at`,
         args: dbArgs([
           p.id, userId, p.title, p.description ?? null, p.icon ?? null,
-          p.category ?? null, p.category_id ?? null,
+          p.category ?? null, p.category_id ?? null, p.sort_order ?? 0,
           createdAt, updatedAt, deletedAt,
         ]),
       });
+      break;
+    }
+
+    case "checklist_template_order": {
+      const visible = await turso.execute({
+        sql: `SELECT 1 FROM checklist_templates
+              WHERE id = ? AND deleted_at IS NULL
+                AND (is_system = 1 OR (is_system = 0 AND user_id = ?))`,
+        args: dbArgs([p.template_id, userId]),
+      });
+      if (visible.rows.length === 0) break;
+
+      const existing = await turso.execute({
+        sql: `SELECT id FROM checklist_template_orders
+              WHERE user_id = ? AND (id = ? OR template_id = ?)
+              LIMIT 1`,
+        args: dbArgs([userId, p.id, p.template_id]),
+      });
+
+      if (existing.rows.length > 0) {
+        const existingId = (existing.rows[0] as unknown as { id: string }).id;
+        await turso.execute({
+          sql: `UPDATE checklist_template_orders
+                SET template_id = ?, sort_order = ?, updated_at = ?, deleted_at = ?
+                WHERE id = ? AND user_id = ?`,
+          args: dbArgs([
+            p.template_id,
+            p.sort_order ?? 0,
+            updatedAt,
+            deletedAt,
+            existingId,
+            userId,
+          ]),
+        });
+      } else {
+        await turso.execute({
+          sql: `INSERT INTO checklist_template_orders
+                (id, user_id, template_id, sort_order, created_at, updated_at, deleted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          args: dbArgs([
+            p.id, userId, p.template_id, p.sort_order ?? 0,
+            createdAt, updatedAt, deletedAt,
+          ]),
+        });
+      }
       break;
     }
 
@@ -776,7 +839,18 @@ export const softDeleteEntity = async (
           sql: "UPDATE checklist_template_items SET deleted_at = ?, updated_at = ? WHERE template_id = ? AND deleted_at IS NULL",
           args: [deletedAt, deletedAt, id],
         },
+        {
+          sql: "UPDATE checklist_template_orders SET deleted_at = ?, updated_at = ? WHERE template_id = ? AND deleted_at IS NULL",
+          args: [deletedAt, deletedAt, id],
+        },
       ], "write");
+      break;
+    }
+    case "checklist_template_order": {
+      await turso.execute({
+        sql: "UPDATE checklist_template_orders SET deleted_at = ?, updated_at = ? WHERE id = ?",
+        args: [deletedAt, deletedAt, id],
+      });
       break;
     }
     case "checklist_run": {
@@ -1086,6 +1160,9 @@ export const getEntityInfo = async (
     case "checklist_template":
       sql = "SELECT user_id, updated_at FROM checklist_templates WHERE id = ?";
       break;
+    case "checklist_template_order":
+      sql = "SELECT user_id, updated_at FROM checklist_template_orders WHERE id = ?";
+      break;
     case "checklist_template_item":
       sql = `SELECT ct.user_id, cti.updated_at
              FROM checklist_template_items cti
@@ -1228,6 +1305,7 @@ export const getFullEntity = async (
     habit_log: "habit_logs",
     checklist_category: "checklist_categories",
     checklist_template: "checklist_templates",
+    checklist_template_order: "checklist_template_orders",
     checklist_template_item: "checklist_template_items",
     checklist_run: "checklist_runs",
     checklist_run_item: "checklist_run_items",

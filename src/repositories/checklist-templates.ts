@@ -10,6 +10,7 @@ export type TemplateRow = {
   icon: string | null;
   category: string | null;
   category_id: string | null;
+  sort_order: number;
   is_system: number;
   times_used: number;
   last_used_at: string | null;
@@ -38,6 +39,7 @@ const mapTemplate = (row: Record<string, unknown>): TemplateRow => ({
   icon: (row.icon as string | null) ?? null,
   category: (row.category as string | null) ?? null,
   category_id: (row.category_id as string | null) ?? null,
+  sort_order: Number(row.resolved_sort_order ?? row.sort_order ?? 0),
   is_system: Number(row.is_system),
   times_used: Number(row.times_used),
   last_used_at: (row.last_used_at as string | null) ?? null,
@@ -101,6 +103,7 @@ export type CreateTemplateInput = {
   icon?: string | null;
   category?: string | null;
   category_id?: string | null;
+  sort_order?: number;
   items: { title: string; description?: string | null; is_required: number }[];
 };
 
@@ -111,8 +114,8 @@ export const createSystemTemplate = async (input: CreateTemplateInput): Promise<
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO checklist_templates
-        (id, user_id, title, description, icon, category, category_id, times_used, is_system, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+        (id, user_id, title, description, icon, category, category_id, sort_order, times_used, is_system, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
       args: [
         templateId,
         SYSTEM_USER_ID,
@@ -121,6 +124,7 @@ export const createSystemTemplate = async (input: CreateTemplateInput): Promise<
         input.icon ?? null,
         input.category ?? null,
         input.category_id ?? null,
+        input.sort_order ?? 0,
         now,
         now,
       ],
@@ -218,31 +222,43 @@ export const deleteItem = async (id: string): Promise<void> => {
 
 export const listTemplatesForUser = async (
   userId: string,
-  opts: { scope: "system" | "own" | "all"; category?: string; category_id?: string }
+  opts: {
+    scope: "system" | "own" | "all";
+    category?: string;
+    category_id?: string;
+    uncategorized?: boolean;
+  }
 ): Promise<TemplateRow[]> => {
-  const where: string[] = ["deleted_at IS NULL"];
-  const args: (string | number)[] = [];
+  const where: string[] = ["t.deleted_at IS NULL"];
+  const args: (string | number | null)[] = [userId];
 
   if (opts.scope === "system") {
-    where.push("is_system = 1");
+    where.push("t.is_system = 1");
   } else if (opts.scope === "own") {
-    where.push("is_system = 0 AND user_id = ?");
+    where.push("t.is_system = 0 AND t.user_id = ?");
     args.push(userId);
   } else {
-    where.push("(is_system = 1 OR (is_system = 0 AND user_id = ?))");
+    where.push("(t.is_system = 1 OR (t.is_system = 0 AND t.user_id = ?))");
     args.push(userId);
   }
   if (opts.category !== undefined) {
-    where.push("category = ?");
+    where.push("t.category = ?");
     args.push(opts.category);
   }
   if (opts.category_id !== undefined) {
-    where.push("category_id = ?");
+    where.push("t.category_id = ?");
     args.push(opts.category_id);
+  } else if (opts.uncategorized) {
+    where.push("t.category_id IS NULL");
   }
-  const sql = `SELECT * FROM checklist_templates
+  const sql = `SELECT t.*, COALESCE(o.sort_order, t.sort_order, 0) AS resolved_sort_order
+               FROM checklist_templates t
+               LEFT JOIN checklist_template_orders o
+                 ON o.template_id = t.id
+                AND o.user_id = ?
+                AND o.deleted_at IS NULL
                WHERE ${where.join(" AND ")}
-               ORDER BY is_system DESC, times_used DESC, created_at DESC`;
+               ORDER BY resolved_sort_order ASC, t.updated_at DESC, t.title ASC, t.id ASC`;
   const res = await turso.execute({ sql, args });
   return (res.rows as unknown as Record<string, unknown>[]).map(mapTemplate);
 };
@@ -252,13 +268,43 @@ export const getTemplateForUser = async (
   userId: string
 ): Promise<TemplateRow | null> => {
   const res = await turso.execute({
-    sql: `SELECT * FROM checklist_templates
-          WHERE id = ? AND deleted_at IS NULL
-            AND (is_system = 1 OR (is_system = 0 AND user_id = ?))`,
-    args: [id, userId],
+    sql: `SELECT t.*, COALESCE(o.sort_order, t.sort_order, 0) AS resolved_sort_order
+          FROM checklist_templates t
+          LEFT JOIN checklist_template_orders o
+            ON o.template_id = t.id
+           AND o.user_id = ?
+           AND o.deleted_at IS NULL
+          WHERE t.id = ? AND t.deleted_at IS NULL
+            AND (t.is_system = 1 OR (t.is_system = 0 AND t.user_id = ?))`,
+    args: [userId, id, userId],
   });
   if (res.rows.length === 0) return null;
   return mapTemplate(res.rows[0] as unknown as Record<string, unknown>);
+};
+
+const nextSortOrderForUser = async (
+  userId: string,
+  categoryId: string | null
+): Promise<number> => {
+  const where = [
+    "t.deleted_at IS NULL",
+    "(t.is_system = 1 OR (t.is_system = 0 AND t.user_id = ?))",
+    categoryId === null ? "t.category_id IS NULL" : "t.category_id = ?",
+  ];
+  const args: (string | number | null)[] = [userId, userId];
+  if (categoryId !== null) args.push(categoryId);
+
+  const res = await turso.execute({
+    sql: `SELECT COALESCE(MAX(COALESCE(o.sort_order, t.sort_order, 0)), 0) + 1 AS next_order
+          FROM checklist_templates t
+          LEFT JOIN checklist_template_orders o
+            ON o.template_id = t.id
+           AND o.user_id = ?
+           AND o.deleted_at IS NULL
+          WHERE ${where.join(" AND ")}`,
+    args,
+  });
+  return Number((res.rows[0] as unknown as Record<string, unknown>).next_order ?? 1);
 };
 
 export const createUserTemplate = async (
@@ -266,13 +312,15 @@ export const createUserTemplate = async (
   input: CreateTemplateInput
 ): Promise<string> => {
   const templateId = newId();
+  const sortOrder =
+    input.sort_order ?? (await nextSortOrderForUser(userId, input.category_id ?? null));
   const now = nowISO();
 
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO checklist_templates
-            (id, user_id, title, description, icon, category, category_id, times_used, is_system, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+            (id, user_id, title, description, icon, category, category_id, sort_order, times_used, is_system, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       args: [
         templateId,
         userId,
@@ -281,9 +329,16 @@ export const createUserTemplate = async (
         input.icon ?? null,
         input.category ?? null,
         input.category_id ?? null,
+        sortOrder,
         now,
         now,
       ],
+    },
+    {
+      sql: `INSERT INTO checklist_template_orders
+            (id, user_id, template_id, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [newId(), userId, templateId, sortOrder, now, now],
     },
     ...input.items.map((it, idx) => ({
       sql: `INSERT INTO checklist_template_items
@@ -330,6 +385,53 @@ export const updateUserTemplate = async (
   return res.rowsAffected > 0;
 };
 
+export const reorderTemplatesForUser = async (
+  userId: string,
+  input: {
+    template_ids: string[];
+    category_id?: string | null;
+    uncategorized?: boolean;
+  }
+): Promise<boolean> => {
+  const ids = input.template_ids;
+  if (new Set(ids).size !== ids.length) return false;
+
+  const where = [
+    "deleted_at IS NULL",
+    "(is_system = 1 OR (is_system = 0 AND user_id = ?))",
+    `id IN (${ids.map(() => "?").join(", ")})`,
+  ];
+  const args: (string | number | null)[] = [userId, ...ids];
+  if (input.category_id !== undefined && input.category_id !== null) {
+    where.push("category_id = ?");
+    args.push(input.category_id);
+  } else if (input.uncategorized || input.category_id === null) {
+    where.push("category_id IS NULL");
+  }
+
+  const check = await turso.execute({
+    sql: `SELECT COUNT(*) AS c FROM checklist_templates WHERE ${where.join(" AND ")}`,
+    args,
+  });
+  if (Number((check.rows[0] as unknown as Record<string, unknown>).c) !== ids.length) {
+    return false;
+  }
+
+  const now = nowISO();
+  const stmts = ids.map((templateId, idx) => ({
+    sql: `INSERT INTO checklist_template_orders
+          (id, user_id, template_id, sort_order, created_at, updated_at, deleted_at)
+          VALUES (?, ?, ?, ?, ?, ?, NULL)
+          ON CONFLICT(user_id, template_id) DO UPDATE SET
+            sort_order = excluded.sort_order,
+            updated_at = excluded.updated_at,
+            deleted_at = NULL`,
+    args: [newId(), userId, templateId, idx + 1, now, now] as (string | number | null)[],
+  }));
+  await turso.batch(stmts, "write");
+  return true;
+};
+
 export const softDeleteUserTemplate = async (
   id: string,
   userId: string
@@ -349,6 +451,12 @@ export const softDeleteUserTemplate = async (
               SET deleted_at = ?, updated_at = ?
               WHERE template_id = ? AND deleted_at IS NULL`,
         args: [now, now, id],
+      },
+      {
+        sql: `UPDATE checklist_template_orders
+              SET deleted_at = ?, updated_at = ?
+              WHERE template_id = ? AND user_id = ? AND deleted_at IS NULL`,
+        args: [now, now, id, userId],
       },
     ],
     "write"

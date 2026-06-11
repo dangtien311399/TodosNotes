@@ -39,6 +39,7 @@ before(async () => {
       icon TEXT,
       category TEXT,
       category_id TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       is_system INTEGER NOT NULL DEFAULT 0,
       times_used INTEGER NOT NULL DEFAULT 0,
       last_used_at TEXT,
@@ -60,9 +61,22 @@ before(async () => {
       deleted_at TEXT
     )
   `);
+  await turso.execute(`
+    CREATE TABLE IF NOT EXISTS checklist_template_orders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      template_id TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT,
+      UNIQUE(user_id, template_id)
+    )
+  `);
 });
 
 beforeEach(async () => {
+  await turso.execute("DELETE FROM checklist_template_orders");
   await turso.execute("DELETE FROM checklist_template_items");
   await turso.execute("DELETE FROM checklist_templates");
   await turso.execute("DELETE FROM checklist_categories");

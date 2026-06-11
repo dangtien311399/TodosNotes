@@ -10,6 +10,7 @@ import type {
   UpsertTemplateItemInput,
   PatchTemplateItemInput,
   ReorderItemsInput,
+  ReorderTemplatesInput,
   ListTemplatesQueryInput,
   StartRunInput,
   UpdateRunItemInput,
@@ -157,6 +158,7 @@ export const createTemplate = async (
     icon: input.icon ?? null,
     category: categoryPatch.category ?? null,
     category_id: categoryPatch.category_id ?? null,
+    sort_order: input.sort_order,
     items: input.items.map((i) => ({
       title: i.title,
       description: i.description ?? null,
@@ -188,6 +190,20 @@ export const updateTemplate = async (
 export const deleteTemplate = async (userId: string, id: string): Promise<void> => {
   const ok = await tplRepo.softDeleteUserTemplate(id, userId);
   if (!ok) throw new ServiceError("not_found");
+};
+
+export const reorderTemplates = async (
+  userId: string,
+  body: ReorderTemplatesInput
+): Promise<{ items: tplRepo.TemplateRow[] }> => {
+  const ok = await tplRepo.reorderTemplatesForUser(userId, body);
+  if (!ok) throw new ServiceError("not_found");
+  const items = await tplRepo.listTemplatesForUser(userId, {
+    scope: "all",
+    category_id: body.category_id ?? undefined,
+    uncategorized: body.uncategorized || body.category_id === null,
+  });
+  return { items };
 };
 
 export const addTemplateItem = async (

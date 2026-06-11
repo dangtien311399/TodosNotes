@@ -24,6 +24,7 @@ export const EntityTypeEnum = z.enum([
   "habit_log",
   "checklist_category",
   "checklist_template",
+  "checklist_template_order",
   "checklist_template_item",
   "checklist_run",
   "checklist_run_item",

@@ -21,7 +21,8 @@ const NOT_NULL: Record<string, string[]> = {
   habits: ["id", "user_id", "title", "frequency_type", "target_per_period", "start_date", "created_at", "updated_at"],
   habit_logs: ["id", "habit_id", "log_date", "created_at", "updated_at"],
   checklist_categories: ["id", "user_id", "name", "slug", "color", "sort_order", "created_at", "updated_at"],
-  checklist_templates: ["id", "user_id", "title", "created_at", "updated_at"],
+  checklist_templates: ["id", "user_id", "title", "sort_order", "created_at", "updated_at"],
+  checklist_template_orders: ["id", "user_id", "template_id", "sort_order", "created_at", "updated_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "created_at", "updated_at"],
   checklist_runs: ["id", "template_id", "user_id", "status", "started_at", "created_at", "updated_at"],
   checklist_run_items: ["id", "run_id", "template_item_id", "status", "created_at", "updated_at"],
@@ -30,6 +31,7 @@ const NOT_NULL: Record<string, string[]> = {
 // ── REQUIRED KEYS per entity type (must be present even if null) ─────────────
 const REQUIRED_KEYS: Record<string, string[]> = {
   habit_logs: ["id", "habit_id", "log_date", "completed", "note", "created_at", "updated_at", "deleted_at"],
+  checklist_template_orders: ["id", "user_id", "template_id", "sort_order", "created_at", "updated_at", "deleted_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "description", "is_required", "created_at", "updated_at", "deleted_at"],
   checklist_runs: ["id", "template_id", "user_id", "name", "status", "started_at", "completed_at", "created_at", "updated_at", "deleted_at"],
   checklist_run_items: ["id", "run_id", "template_item_id", "status", "completed_at", "note", "created_at", "updated_at", "deleted_at"],
@@ -57,11 +59,18 @@ async function createTestData(userId: string): Promise<void> {
 
   // Create a checklist template + 2 items + 1 run (with items)
   const tplId = newId();
+  const orderId = newId();
   await turso.execute({
     sql: `INSERT INTO checklist_templates (id, user_id, title, description, icon, category,
-          is_system, times_used, last_used_at, created_at, updated_at)
-          VALUES (?,?,?,NULL,NULL,NULL,0,0,NULL,?,?)`,
+          sort_order, is_system, times_used, last_used_at, created_at, updated_at)
+          VALUES (?,?,?,NULL,NULL,NULL,1,0,0,NULL,?,?)`,
     args: [tplId, userId, "Verify template", now, now],
+  });
+  await turso.execute({
+    sql: `INSERT INTO checklist_template_orders
+          (id, user_id, template_id, sort_order, created_at, updated_at)
+          VALUES (?,?,?,?,?,?)`,
+    args: [orderId, userId, tplId, 1, now, now],
   });
   const item1 = newId(); const item2 = newId();
   await turso.batch([

@@ -18,6 +18,7 @@ export type EntityType =
   | "habit_log"
   | "checklist_category"
   | "checklist_template"
+  | "checklist_template_order"
   | "checklist_template_item"
   | "checklist_run"
   | "checklist_run_item"
@@ -156,12 +157,23 @@ export type SyncChecklistTemplate = {
   icon: string | null;
   category: string | null;
   category_id: string | null;
+  sort_order: number;
   /** server-only: STRIPPED on push */
   is_system: boolean;
   /** server-only: STRIPPED on push */
   times_used: number;
   /** server-only: STRIPPED on push */
   last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export type SyncChecklistTemplateOrder = {
+  id: string;
+  user_id: string;
+  template_id: string;
+  sort_order: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

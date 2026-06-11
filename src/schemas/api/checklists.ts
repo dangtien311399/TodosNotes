@@ -4,6 +4,11 @@ const HexColor = z
   .string()
   .regex(/^#[0-9a-fA-F]{6}$/, "color must be hex like #aabbcc");
 
+const QueryBoolean = z.union([
+  z.boolean(),
+  z.enum(["true", "false"]).transform((v) => v === "true"),
+]);
+
 const ItemInput = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().max(2000).optional(),
@@ -51,6 +56,7 @@ export const CreateTemplateSchema = z.object({
   icon: z.string().max(50).optional(),
   category: z.string().max(50).optional(),
   category_id: z.uuid().nullable().optional(),
+  sort_order: z.number().int().min(0).max(1_000_000).optional(),
   items: z.array(ItemInput).min(1).max(50),
 });
 export type CreateTemplateInput = z.infer<typeof CreateTemplateSchema>;
@@ -75,10 +81,18 @@ export const ReorderItemsSchema = z.object({
 });
 export type ReorderItemsInput = z.infer<typeof ReorderItemsSchema>;
 
+export const ReorderTemplatesSchema = z.object({
+  template_ids: z.array(z.uuid()).min(1).max(200),
+  category_id: z.uuid().nullable().optional(),
+  uncategorized: z.boolean().optional().default(false),
+});
+export type ReorderTemplatesInput = z.infer<typeof ReorderTemplatesSchema>;
+
 export const ListTemplatesQuerySchema = z.object({
   scope: z.enum(["system", "own", "all"]).optional().default("all"),
   category: z.string().max(50).optional(),
   category_id: z.uuid().optional(),
+  uncategorized: QueryBoolean.optional().default(false),
 });
 export type ListTemplatesQueryInput = z.infer<typeof ListTemplatesQuerySchema>;
 

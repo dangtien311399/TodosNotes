@@ -8,6 +8,7 @@ import {
   UpsertTemplateItemSchema,
   PatchTemplateItemSchema,
   ReorderItemsSchema,
+  ReorderTemplatesSchema,
   ListTemplatesQuerySchema,
   StartRunSchema,
   UpdateRunItemSchema,
@@ -106,6 +107,20 @@ export default async function checklistsRoutes(app: FastifyInstance) {
         .send({ error: "bad_input", issues: parsed.error.issues });
     }
     return checklists.listTemplates(req.userId, parsed.data);
+  });
+
+  app.post("/templates/reorder", async (req, reply) => {
+    const parsed = ReorderTemplatesSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    try {
+      return await checklists.reorderTemplates(req.userId, parsed.data);
+    } catch (e) {
+      return mapErr(e, reply);
+    }
   });
 
   app.get<{ Params: { id: string } }>("/templates/:id", async (req, reply) => {
