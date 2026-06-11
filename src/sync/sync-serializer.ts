@@ -16,6 +16,7 @@ export type EntityType =
   | "tag"
   | "habit"
   | "habit_log"
+  | "checklist_category"
   | "checklist_template"
   | "checklist_template_item"
   | "checklist_run"
@@ -132,6 +133,21 @@ export type SyncHabitLog = {
   deleted_at: string | null;
 };
 
+export type SyncChecklistCategory = {
+  id: string;
+  user_id: string;
+  name: string;
+  slug: string;
+  icon: string | null;
+  color: string;
+  sort_order: number;
+  /** server-only: STRIPPED on push */
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
 export type SyncChecklistTemplate = {
   id: string;
   user_id: string;
@@ -139,6 +155,7 @@ export type SyncChecklistTemplate = {
   description: string | null;
   icon: string | null;
   category: string | null;
+  category_id: string | null;
   /** server-only: STRIPPED on push */
   is_system: boolean;
   /** server-only: STRIPPED on push */
@@ -229,6 +246,7 @@ const fromBoolNullable = (v: unknown): number | null => {
 
 const SERVER_ONLY: Partial<Record<EntityType, string[]>> = {
   habit: ["current_streak", "longest_streak"],
+  checklist_category: ["is_system"],
   checklist_template: ["times_used", "last_used_at", "is_system"],
   user: ["email", "password_hash", "is_admin"],
 };
@@ -294,6 +312,13 @@ export function toSyncEntity(
     }
 
     case "checklist_template": {
+      return {
+        ...row,
+        is_system: toBool(row.is_system),
+      };
+    }
+
+    case "checklist_category": {
       return {
         ...row,
         is_system: toBool(row.is_system),

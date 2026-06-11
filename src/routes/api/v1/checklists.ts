@@ -1,5 +1,8 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
+  CreateCategorySchema,
+  UpdateCategorySchema,
+  ListCategoriesQuerySchema,
   CreateTemplateSchema,
   UpdateTemplateSchema,
   UpsertTemplateItemSchema,
@@ -15,6 +18,9 @@ import * as checklists from "../../../services/checklists.js";
 const mapErr = (e: unknown, reply: FastifyReply): FastifyReply => {
   if (e instanceof checklists.ServiceError) {
     if (e.code === "not_found") return reply.code(404).send({ error: "not_found" });
+    if (e.code === "duplicate") return reply.code(409).send({ error: "duplicate" });
+    if (e.code === "invalid_category")
+      return reply.code(400).send({ error: "invalid_category" });
     if (e.code === "incomplete_required")
       return reply.code(409).send({ error: "incomplete_required" });
   }
@@ -26,6 +32,69 @@ const mapErr = (e: unknown, reply: FastifyReply): FastifyReply => {
 
 export default async function checklistsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireUser);
+
+  // ===== Categories =====
+
+  app.get("/categories", async (req, reply) => {
+    const parsed = ListCategoriesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    return checklists.listCategories(req.userId, parsed.data);
+  });
+
+  app.get<{ Params: { id: string } }>("/categories/:id", async (req, reply) => {
+    try {
+      return await checklists.getCategoryDetail(req.userId, req.params.id);
+    } catch (e) {
+      return mapErr(e, reply);
+    }
+  });
+
+  app.post("/categories", async (req, reply) => {
+    const parsed = CreateCategorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    try {
+      const created = await checklists.createCategory(req.userId, parsed.data);
+      return reply.code(201).send(created);
+    } catch (e) {
+      return mapErr(e, reply);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/categories/:id", async (req, reply) => {
+    const parsed = UpdateCategorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    try {
+      const category = await checklists.updateCategory(
+        req.userId,
+        req.params.id,
+        parsed.data
+      );
+      return { category };
+    } catch (e) {
+      return mapErr(e, reply);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/categories/:id", async (req, reply) => {
+    try {
+      await checklists.deleteCategory(req.userId, req.params.id);
+      return reply.code(204).send();
+    } catch (e) {
+      return mapErr(e, reply);
+    }
+  });
 
   // ===== Templates =====
 

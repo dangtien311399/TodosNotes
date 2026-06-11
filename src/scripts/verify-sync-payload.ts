@@ -20,6 +20,7 @@ const NOT_NULL: Record<string, string[]> = {
   notes: ["id", "user_id", "title", "type", "created_at", "updated_at"],
   habits: ["id", "user_id", "title", "frequency_type", "target_per_period", "start_date", "created_at", "updated_at"],
   habit_logs: ["id", "habit_id", "log_date", "created_at", "updated_at"],
+  checklist_categories: ["id", "user_id", "name", "slug", "color", "sort_order", "created_at", "updated_at"],
   checklist_templates: ["id", "user_id", "title", "created_at", "updated_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "created_at", "updated_at"],
   checklist_runs: ["id", "template_id", "user_id", "status", "started_at", "created_at", "updated_at"],

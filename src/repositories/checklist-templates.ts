@@ -9,6 +9,7 @@ export type TemplateRow = {
   description: string | null;
   icon: string | null;
   category: string | null;
+  category_id: string | null;
   is_system: number;
   times_used: number;
   last_used_at: string | null;
@@ -36,6 +37,7 @@ const mapTemplate = (row: Record<string, unknown>): TemplateRow => ({
   description: (row.description as string | null) ?? null,
   icon: (row.icon as string | null) ?? null,
   category: (row.category as string | null) ?? null,
+  category_id: (row.category_id as string | null) ?? null,
   is_system: Number(row.is_system),
   times_used: Number(row.times_used),
   last_used_at: (row.last_used_at as string | null) ?? null,
@@ -98,6 +100,7 @@ export type CreateTemplateInput = {
   description?: string | null;
   icon?: string | null;
   category?: string | null;
+  category_id?: string | null;
   items: { title: string; description?: string | null; is_required: number }[];
 };
 
@@ -108,8 +111,8 @@ export const createSystemTemplate = async (input: CreateTemplateInput): Promise<
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO checklist_templates
-        (id, user_id, title, description, icon, category, times_used, is_system, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+        (id, user_id, title, description, icon, category, category_id, times_used, is_system, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
       args: [
         templateId,
         SYSTEM_USER_ID,
@@ -117,6 +120,7 @@ export const createSystemTemplate = async (input: CreateTemplateInput): Promise<
         input.description ?? null,
         input.icon ?? null,
         input.category ?? null,
+        input.category_id ?? null,
         now,
         now,
       ],
@@ -135,7 +139,7 @@ export const createSystemTemplate = async (input: CreateTemplateInput): Promise<
 
 export const updateSystemTemplate = async (
   id: string,
-  patch: { title?: string; description?: string | null; icon?: string | null; category?: string | null }
+  patch: { title?: string; description?: string | null; icon?: string | null; category?: string | null; category_id?: string | null }
 ): Promise<void> => {
   const sets: string[] = [];
   const args: (string | number | null)[] = [];
@@ -143,6 +147,7 @@ export const updateSystemTemplate = async (
   if (patch.description !== undefined) { sets.push("description = ?"); args.push(patch.description); }
   if (patch.icon !== undefined) { sets.push("icon = ?"); args.push(patch.icon); }
   if (patch.category !== undefined) { sets.push("category = ?"); args.push(patch.category); }
+  if (patch.category_id !== undefined) { sets.push("category_id = ?"); args.push(patch.category_id); }
   if (sets.length === 0) return;
   sets.push("updated_at = ?");
   args.push(nowISO());
@@ -213,7 +218,7 @@ export const deleteItem = async (id: string): Promise<void> => {
 
 export const listTemplatesForUser = async (
   userId: string,
-  opts: { scope: "system" | "own" | "all"; category?: string }
+  opts: { scope: "system" | "own" | "all"; category?: string; category_id?: string }
 ): Promise<TemplateRow[]> => {
   const where: string[] = ["deleted_at IS NULL"];
   const args: (string | number)[] = [];
@@ -230,6 +235,10 @@ export const listTemplatesForUser = async (
   if (opts.category !== undefined) {
     where.push("category = ?");
     args.push(opts.category);
+  }
+  if (opts.category_id !== undefined) {
+    where.push("category_id = ?");
+    args.push(opts.category_id);
   }
   const sql = `SELECT * FROM checklist_templates
                WHERE ${where.join(" AND ")}
@@ -262,8 +271,8 @@ export const createUserTemplate = async (
   const stmts: { sql: string; args: (string | number | null)[] }[] = [
     {
       sql: `INSERT INTO checklist_templates
-            (id, user_id, title, description, icon, category, times_used, is_system, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+            (id, user_id, title, description, icon, category, category_id, times_used, is_system, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       args: [
         templateId,
         userId,
@@ -271,6 +280,7 @@ export const createUserTemplate = async (
         input.description ?? null,
         input.icon ?? null,
         input.category ?? null,
+        input.category_id ?? null,
         now,
         now,
       ],
@@ -299,7 +309,7 @@ export const createUserTemplate = async (
 export const updateUserTemplate = async (
   id: string,
   userId: string,
-  patch: { title?: string; description?: string | null; icon?: string | null; category?: string | null }
+  patch: { title?: string; description?: string | null; icon?: string | null; category?: string | null; category_id?: string | null }
 ): Promise<boolean> => {
   const sets: string[] = [];
   const args: (string | number | null)[] = [];
@@ -307,6 +317,7 @@ export const updateUserTemplate = async (
   if (patch.description !== undefined) { sets.push("description = ?"); args.push(patch.description); }
   if (patch.icon !== undefined) { sets.push("icon = ?"); args.push(patch.icon); }
   if (patch.category !== undefined) { sets.push("category = ?"); args.push(patch.category); }
+  if (patch.category_id !== undefined) { sets.push("category_id = ?"); args.push(patch.category_id); }
   if (sets.length === 0) return true;
   sets.push("updated_at = ?");
   args.push(nowISO());

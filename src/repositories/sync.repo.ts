@@ -25,6 +25,7 @@ export type SyncChanges = {
   notes: Record<string, unknown>[];
   habits: Record<string, unknown>[];
   habit_logs: Record<string, unknown>[];
+  checklist_categories: Record<string, unknown>[];
   checklist_templates: Record<string, unknown>[];
   checklist_template_items: Record<string, unknown>[];
   checklist_runs: Record<string, unknown>[];
@@ -119,7 +120,7 @@ export const getChangesSince = async (
   // on remote DBs (Turso: ~50 ms/query × 10 seq → 2 round-trips instead).
   const [
     usersRes, tagsRes, todosRes, notesRes,
-    habitsRes, habitLogsRes, templatesRes, templateItemsRes,
+    habitsRes, habitLogsRes, categoriesRes, templatesRes, templateItemsRes,
     runsRes, runItemsRes,
   ] = await Promise.all([
     turso.execute({
@@ -166,6 +167,16 @@ export const getChangesSince = async (
            JOIN habits h ON h.id = l.habit_id
            WHERE h.user_id = ? AND l.updated_at > ?
            ORDER BY l.updated_at DESC`,
+      args: a1,
+    }),
+    turso.execute({
+      sql: isInitial
+        ? `SELECT * FROM checklist_categories
+           WHERE (user_id = ? OR is_system = 1) AND deleted_at IS NULL
+           ORDER BY is_system DESC, sort_order ASC, updated_at DESC`
+        : `SELECT * FROM checklist_categories
+           WHERE (user_id = ? OR is_system = 1) AND updated_at > ?
+           ORDER BY is_system DESC, sort_order ASC, updated_at DESC`,
       args: a1,
     }),
     turso.execute({
@@ -317,6 +328,9 @@ export const getChangesSince = async (
   const habit_logs = (habitLogsRes.rows as unknown as Record<string, unknown>[]).map((r) =>
     toSyncEntity(r, "habit_log")
   );
+  const checklist_categories = (
+    categoriesRes.rows as unknown as Record<string, unknown>[]
+  ).map((r) => toSyncEntity(r, "checklist_category"));
   const checklist_templates = (templatesRes.rows as unknown as Record<string, unknown>[]).map(
     (r) => toSyncEntity(r, "checklist_template")
   );
@@ -337,6 +351,7 @@ export const getChangesSince = async (
     notes,
     habits,
     habit_logs,
+    checklist_categories,
     checklist_templates,
     checklist_template_items,
     checklist_runs,
@@ -357,6 +372,7 @@ export const getEntityUpdatedAt = async (
     tag: "tags",
     habit: "habits",
     habit_log: "habit_logs",
+    checklist_category: "checklist_categories",
     checklist_template: "checklist_templates",
     checklist_template_item: "checklist_template_items",
     checklist_run: "checklist_runs",
@@ -551,25 +567,49 @@ export const upsertEntity = async (
       break;
     }
 
+    case "checklist_category": {
+      await turso.execute({
+        sql: `INSERT INTO checklist_categories
+              (id, user_id, name, slug, icon, color, sort_order, is_system,
+               created_at, updated_at, deleted_at)
+              VALUES (?,?,?,?,?,?,?,0,?,?,?)
+              ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                slug = excluded.slug,
+                icon = excluded.icon,
+                color = excluded.color,
+                sort_order = excluded.sort_order,
+                updated_at = excluded.updated_at,
+                deleted_at = excluded.deleted_at`,
+        args: dbArgs([
+          p.id, userId, p.name, p.slug, p.icon ?? null,
+          p.color ?? "#888888", p.sort_order ?? 0,
+          createdAt, updatedAt, deletedAt,
+        ]),
+      });
+      break;
+    }
+
     case "checklist_template": {
       // times_used, last_used_at, is_system: server-only, already stripped
       // On INSERT default: times_used=0, is_system=0 (user can't set system)
       await turso.execute({
         sql: `INSERT INTO checklist_templates
-              (id, user_id, title, description, icon, category,
+              (id, user_id, title, description, icon, category, category_id,
                is_system, times_used, last_used_at,
                created_at, updated_at, deleted_at)
-              VALUES (?,?,?,?,?,?,0,0,NULL,?,?,?)
+              VALUES (?,?,?,?,?,?,?,0,0,NULL,?,?,?)
               ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 description = excluded.description,
                 icon = excluded.icon,
                 category = excluded.category,
+                category_id = excluded.category_id,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at`,
         args: dbArgs([
           p.id, userId, p.title, p.description ?? null, p.icon ?? null,
-          p.category ?? null,
+          p.category ?? null, p.category_id ?? null,
           createdAt, updatedAt, deletedAt,
         ]),
       });
@@ -709,6 +749,19 @@ export const softDeleteEntity = async (
         {
           sql: "UPDATE habit_logs SET deleted_at = ?, updated_at = ? WHERE habit_id = ? AND deleted_at IS NULL",
           args: [deletedAt, deletedAt, id],
+        },
+      ], "write");
+      break;
+    }
+    case "checklist_category": {
+      await turso.batch([
+        {
+          sql: "UPDATE checklist_categories SET deleted_at = ?, updated_at = ? WHERE id = ?",
+          args: [deletedAt, deletedAt, id],
+        },
+        {
+          sql: "UPDATE checklist_templates SET category_id = NULL, category = NULL, updated_at = ? WHERE category_id = ?",
+          args: [deletedAt, id],
         },
       ], "write");
       break;
@@ -1027,6 +1080,9 @@ export const getEntityInfo = async (
              FROM habit_logs hl JOIN habits h ON h.id = hl.habit_id
              WHERE hl.id = ?`;
       break;
+    case "checklist_category":
+      sql = "SELECT user_id, updated_at FROM checklist_categories WHERE id = ?";
+      break;
     case "checklist_template":
       sql = "SELECT user_id, updated_at FROM checklist_templates WHERE id = ?";
       break;
@@ -1059,6 +1115,17 @@ export const getEntityInfo = async (
 export const isSystemTemplate = async (id: string): Promise<boolean> => {
   const res = await turso.execute({
     sql: "SELECT is_system FROM checklist_templates WHERE id = ?",
+    args: [id],
+  });
+  if (res.rows.length === 0) return false;
+  const row = res.rows[0] as unknown as { is_system: number };
+  return row.is_system === 1;
+};
+
+/** Return true if checklist_category id exists AND is_system = 1. */
+export const isSystemCategory = async (id: string): Promise<boolean> => {
+  const res = await turso.execute({
+    sql: "SELECT is_system FROM checklist_categories WHERE id = ?",
     args: [id],
   });
   if (res.rows.length === 0) return false;
@@ -1159,6 +1226,7 @@ export const getFullEntity = async (
     tag: "tags",
     habit: "habits",
     habit_log: "habit_logs",
+    checklist_category: "checklist_categories",
     checklist_template: "checklist_templates",
     checklist_template_item: "checklist_template_items",
     checklist_run: "checklist_runs",

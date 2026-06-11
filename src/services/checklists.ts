@@ -1,6 +1,10 @@
 import * as tplRepo from "../repositories/checklist-templates.js";
+import * as catRepo from "../repositories/checklist-categories.js";
 import * as runsRepo from "../repositories/checklist-runs.js";
 import type {
+  CreateCategoryInput,
+  UpdateCategoryInput,
+  ListCategoriesQueryInput,
   CreateTemplateInput,
   UpdateTemplateInput,
   UpsertTemplateItemInput,
@@ -13,10 +17,23 @@ import type {
 } from "../schemas/api/checklists.js";
 
 export class ServiceError extends Error {
-  constructor(public code: "not_found" | "incomplete_required") {
+  constructor(
+    public code:
+      | "not_found"
+      | "incomplete_required"
+      | "duplicate"
+      | "invalid_category"
+  ) {
     super(code);
   }
 }
+
+const wrapCategory = (e: unknown): never => {
+  if (e instanceof catRepo.CategoryRepoError) {
+    throw new ServiceError(e.code);
+  }
+  throw e;
+};
 
 const wrapRun = (e: unknown): never => {
   if (e instanceof runsRepo.RunRepoError) {
@@ -26,8 +43,85 @@ const wrapRun = (e: unknown): never => {
 };
 
 // ============================================================
+// Categories
+// ============================================================
+
+export const listCategories = async (
+  userId: string,
+  query: ListCategoriesQueryInput
+): Promise<{ items: catRepo.CategoryRow[] }> => {
+  const items = await catRepo.listCategoriesForUser(userId, query);
+  return { items };
+};
+
+export const getCategoryDetail = async (
+  userId: string,
+  id: string
+): Promise<{ category: catRepo.CategoryRow }> => {
+  const category = await catRepo.getCategoryForUser(id, userId);
+  if (!category) throw new ServiceError("not_found");
+  return { category };
+};
+
+export const createCategory = async (
+  userId: string,
+  input: CreateCategoryInput
+): Promise<{ category: catRepo.CategoryRow }> => {
+  try {
+    const category = await catRepo.createUserCategory(userId, input);
+    return { category };
+  } catch (e) {
+    return wrapCategory(e);
+  }
+};
+
+export const updateCategory = async (
+  userId: string,
+  id: string,
+  patch: UpdateCategoryInput
+): Promise<catRepo.CategoryRow> => {
+  try {
+    const ok = await catRepo.updateUserCategory(id, userId, patch);
+    if (!ok) throw new ServiceError("not_found");
+  } catch (e) {
+    return wrapCategory(e);
+  }
+  const row = await catRepo.getUserCategoryById(id, userId);
+  if (!row) throw new ServiceError("not_found");
+  return row;
+};
+
+export const deleteCategory = async (userId: string, id: string): Promise<void> => {
+  const ok = await catRepo.softDeleteUserCategory(id, userId);
+  if (!ok) throw new ServiceError("not_found");
+};
+
+// ============================================================
 // Templates
 // ============================================================
+
+const resolveTemplateCategory = async (
+  userId: string,
+  input: {
+    category_id?: string | null;
+    category?: string | null;
+  }
+): Promise<{ category_id?: string | null; category?: string | null }> => {
+  if (input.category_id !== undefined) {
+    if (input.category_id === null) {
+      return { category_id: null, category: input.category ?? null };
+    }
+    const category = await catRepo.getCategoryForUser(input.category_id, userId);
+    if (!category) throw new ServiceError("invalid_category");
+    return { category_id: category.id, category: category.name };
+  }
+
+  if (input.category !== undefined) {
+    return { category_id: null, category: input.category };
+  }
+
+  return {};
+};
 
 export const listTemplates = async (
   userId: string,
@@ -56,11 +150,13 @@ export const createTemplate = async (
   userId: string,
   input: CreateTemplateInput
 ): Promise<{ template: tplRepo.TemplateRow; items: tplRepo.ItemRow[] }> => {
+  const categoryPatch = await resolveTemplateCategory(userId, input);
   const id = await tplRepo.createUserTemplate(userId, {
     title: input.title,
     description: input.description ?? null,
     icon: input.icon ?? null,
-    category: input.category ?? null,
+    category: categoryPatch.category ?? null,
+    category_id: categoryPatch.category_id ?? null,
     items: input.items.map((i) => ({
       title: i.title,
       description: i.description ?? null,
@@ -78,7 +174,11 @@ export const updateTemplate = async (
   id: string,
   patch: UpdateTemplateInput
 ): Promise<tplRepo.TemplateRow> => {
-  const ok = await tplRepo.updateUserTemplate(id, userId, patch);
+  const categoryPatch = await resolveTemplateCategory(userId, patch);
+  const ok = await tplRepo.updateUserTemplate(id, userId, {
+    ...patch,
+    ...categoryPatch,
+  });
   if (!ok) throw new ServiceError("not_found");
   const row = await tplRepo.getTemplateForUser(id, userId);
   if (!row) throw new ServiceError("not_found");

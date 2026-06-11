@@ -5,6 +5,8 @@ export type DayTodoStat = {
   title: string;
   status: string;
   scheduled_date: string | null;
+  due_at: string | null;
+  completed_at: string | null;
   is_important: number | null;
   is_urgent: number | null;
   is_frog: number;
@@ -16,6 +18,8 @@ const mapStat = (row: Record<string, unknown>): DayTodoStat => ({
   title: row.title as string,
   status: row.status as string,
   scheduled_date: (row.scheduled_date as string | null) ?? null,
+  due_at: (row.due_at as string | null) ?? null,
+  completed_at: (row.completed_at as string | null) ?? null,
   is_important: row.is_important === null ? null : Number(row.is_important),
   is_urgent: row.is_urgent === null ? null : Number(row.is_urgent),
   is_frog: Number(row.is_frog),
@@ -28,7 +32,8 @@ export const listDayTopLevelStats = async (
   date: string
 ): Promise<DayTodoStat[]> => {
   const res = await turso.execute({
-    sql: `SELECT id, title, status, scheduled_date, is_important, is_urgent, is_frog, frog_date
+    sql: `SELECT id, title, status, scheduled_date, due_at, completed_at,
+                 is_important, is_urgent, is_frog, frog_date
           FROM todos
           WHERE user_id = ? AND scheduled_date = ?
             AND parent_id IS NULL
@@ -91,7 +96,8 @@ export const rawTodosInRange = async (
   to: string
 ): Promise<DayTodoStat[]> => {
   const res = await turso.execute({
-    sql: `SELECT id, title, status, scheduled_date, is_important, is_urgent, is_frog, frog_date
+    sql: `SELECT id, title, status, scheduled_date, due_at, completed_at,
+                 is_important, is_urgent, is_frog, frog_date
           FROM todos
           WHERE user_id = ? AND scheduled_date BETWEEN ? AND ?
             AND parent_id IS NULL

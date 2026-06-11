@@ -6,6 +6,7 @@ import habitsRoutes from "./habits.js";
 import checklistsRoutes from "./checklists.js";
 import dashboardRoutes from "./dashboard.js";
 import syncRoutes from "./sync.js";
+import tagsRoutes from "./tags.js";
 
 export default async function apiRoutes(app: FastifyInstance) {
   await app.register(authRoutes, { prefix: "/auth" });
@@ -15,4 +16,5 @@ export default async function apiRoutes(app: FastifyInstance) {
   await app.register(checklistsRoutes, { prefix: "/checklists" });
   await app.register(dashboardRoutes, { prefix: "/dashboard" });
   await app.register(syncRoutes, { prefix: "/sync" });
+  await app.register(tagsRoutes, { prefix: "/tags" });
 }

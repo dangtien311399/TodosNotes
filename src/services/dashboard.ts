@@ -44,6 +44,18 @@ const todoWeight = (t: dashRepo.DayTodoStat, date: string): number =>
   quadrantWeight(t.is_important, t.is_urgent) +
   (t.is_frog === 1 && t.frog_date === date ? W.FROG_BONUS : 0);
 
+const timestampOf = (value: string | null): number | null => {
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+};
+
+const isCompletedLate = (t: dashRepo.DayTodoStat): boolean => {
+  const dueAt = timestampOf(t.due_at);
+  const completedAt = timestampOf(t.completed_at);
+  return dueAt !== null && completedAt !== null && completedAt > dueAt;
+};
+
 type HabitScoreInput = { total: number; completed: number };
 
 const computeScore = (
@@ -56,7 +68,7 @@ const computeScore = (
   for (const t of todos) {
     const w = todoWeight(t, date);
     total += w;
-    if (t.status === "done") done += w;
+    if (t.status === "done") done += isCompletedLate(t) ? w / 2 : w;
   }
   total += habits.total * W.HABIT;
   done += habits.completed * W.HABIT;

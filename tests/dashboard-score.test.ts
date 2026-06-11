@@ -15,14 +15,17 @@ const insertTodo = async (
   date: string,
   status: "open" | "done",
   isImportant: number,
-  isUrgent: number
+  isUrgent: number,
+  dueAt: string | null = null,
+  completedAt: string | null = status === "done" ? NOW : null
 ): Promise<void> => {
   await turso.execute({
     sql: `INSERT INTO todos
           (id, user_id, parent_id, title, status, scheduled_date,
            is_important, is_urgent, is_frog, frog_date, position,
+           due_at, completed_at,
            created_at, updated_at, deleted_at)
-          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 0, NULL, 0, ?, ?, NULL)`,
+          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 0, NULL, 0, ?, ?, ?, ?, NULL)`,
     args: [
       id,
       USER_ID,
@@ -31,6 +34,8 @@ const insertTodo = async (
       date,
       isImportant,
       isUrgent,
+      dueAt,
+      completedAt,
       NOW,
       NOW,
     ],
@@ -76,6 +81,8 @@ before(async () => {
       is_frog INTEGER NOT NULL DEFAULT 0,
       frog_date TEXT,
       position INTEGER NOT NULL DEFAULT 0,
+      due_at TEXT,
+      completed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       deleted_at TEXT
@@ -120,6 +127,25 @@ test("today score includes habits at half a todo point each", async () => {
   assert.equal(stats.todos.total, 1);
   assert.deepEqual(stats.habits_today, { total: 2, completed: 1 });
   assert.equal(stats.score, 25);
+});
+
+test("completed overdue todos only receive half of their normal points", async () => {
+  const date = "2026-01-10";
+  await insertTodo(
+    "todo-late-q4",
+    date,
+    "done",
+    0,
+    0,
+    "2026-01-10T08:00:00.000Z",
+    "2026-01-10T09:00:00.000Z"
+  );
+
+  const stats = await dashboard.getTodayStats(USER_ID, { date });
+
+  assert.equal(stats.todos.total, 1);
+  assert.equal(stats.todos.done, 1);
+  assert.equal(stats.score, 50);
 });
 
 test("calendar score is populated for habit-only past days", async () => {

@@ -17,6 +17,7 @@ import type { SyncOp } from "../schemas/api/sync.js";
 import {
   getEntityInfo,
   isSystemTemplate,
+  isSystemCategory,
   getTagByNaturalKey,
   getHabitLogByNaturalKey,
   resurrectTagRow,
@@ -74,6 +75,10 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
   // because is_system is a server field; but update/delete must be blocked).
   if (type === "checklist_template" && opType !== "create") {
     const sys = await isSystemTemplate(id);
+    if (sys) return { id, status: "error", error: "read_only" };
+  }
+  if (type === "checklist_category" && opType !== "create") {
+    const sys = await isSystemCategory(id);
     if (sys) return { id, status: "error", error: "read_only" };
   }
 
