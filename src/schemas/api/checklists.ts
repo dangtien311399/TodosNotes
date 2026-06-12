@@ -108,8 +108,14 @@ export const UpdateRunItemSchema = z.object({
 });
 export type UpdateRunItemInput = z.infer<typeof UpdateRunItemSchema>;
 
+export const CompleteRunSchema = z.object({
+  duration_ms: z.number().int().min(0).nullable().optional(),
+});
+export type CompleteRunInput = z.infer<typeof CompleteRunSchema>;
+
 export const ListRunsQuerySchema = z.object({
   status: z.enum(["in_progress", "completed", "abandoned"]).optional(),
+  template_id: z.uuid().optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

@@ -199,6 +199,7 @@ export type SyncChecklistRun = {
   status: "in_progress" | "completed" | "abandoned";
   started_at: string;
   completed_at: string | null;
+  duration_ms: number | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

@@ -65,6 +65,22 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
     return { id: "unknown", status: "error", error: "bad_input" };
   }
 
+  if (
+    type === "checklist_run" &&
+    opType !== "delete" &&
+    "duration_ms" in payload
+  ) {
+    const durationMs = payload.duration_ms;
+    if (
+      durationMs !== null &&
+      (typeof durationMs !== "number" ||
+        !Number.isInteger(durationMs) ||
+        durationMs < 0)
+    ) {
+      return { id, status: "error", error: "bad_input" };
+    }
+  }
+
   // ── §5.3 Strip server-only fields + convert booleans ─────────────────────
   // fromSyncEntity does NOT strip junction fields (tag_ids, note_links, etc.)
   // so we can pass the original `payload` to reconcileJunctions later.

@@ -8,6 +8,7 @@ import type {
   ClassifyEisenhowerInput,
   MoveToDayInput,
   AttachTagInput,
+  ReplaceTodoTagsInput,
   ListTodosQueryInput,
 } from "../schemas/api/todos.js";
 
@@ -29,6 +30,23 @@ const wrapRepo = (e: unknown): never => {
     throw new ServiceError(e.code);
   }
   throw e;
+};
+
+const resolveTagIds = async (
+  userId: string,
+  input: { tag_ids?: string[]; tags?: string[] }
+): Promise<string[]> => {
+  const ids = new Set<string>();
+  for (const tagId of input.tag_ids ?? []) {
+    const tag = await tagsRepo.getTagById(tagId, userId);
+    if (!tag) throw new ServiceError("not_found");
+    ids.add(tag.id);
+  }
+  for (const name of input.tags ?? []) {
+    const tag = await tagsRepo.findOrCreateByName(userId, name);
+    ids.add(tag.id);
+  }
+  return [...ids];
 };
 
 export const createTodo = async (
@@ -63,17 +81,13 @@ export const createTodo = async (
     return wrapRepo(e);
   }
 
-  if (input.tags && input.tags.length > 0) {
-    const resolved = await Promise.all(
-      input.tags.map((name) => tagsRepo.findOrCreateByName(userId, name))
-    );
-    for (const tag of resolved) {
-      try {
-        await todosRepo.attachTagToTodo(todo.id, tag.id, userId);
-      } catch (e) {
-        wrapRepo(e);
-      }
-    }
+  const tagIds = await resolveTagIds(userId, {
+    tag_ids: input.tag_ids,
+    tags: input.tags,
+  });
+  if (tagIds.length > 0) {
+    const ok = await todosRepo.replaceTodoTags(todo.id, tagIds, userId);
+    if (!ok) throw new ServiceError("not_found");
   }
 
   const detail = await todosRepo.getTodoWithRelations(todo.id, userId);
@@ -94,10 +108,14 @@ export const listTodos = async (
     parent_id: query.parent_id,
     q: query.q,
     tag: query.tag,
+    tag_id: query.tag_id,
   });
   // Type guard: với opts object trả ListResult; với number trả array. Ở đây luôn object.
   if (Array.isArray(result)) {
-    return { rows: result, nextCursor: null };
+    return {
+      rows: result.map((row) => ({ ...row, tags: [], tag_ids: [] })),
+      nextCursor: null,
+    };
   }
   return result;
 };
@@ -115,11 +133,23 @@ export const updateTodo = async (
   userId: string,
   id: string,
   patch: UpdateTodoInput
-): Promise<todosRepo.TodoRow> => {
+): Promise<todosRepo.TodoWithTags> => {
+  const { tags, tag_ids, ...todoPatch } = patch;
+  const shouldReplaceTags = tags !== undefined || tag_ids !== undefined;
   try {
-    const row = await todosRepo.updateTodo(id, userId, patch);
+    const row = await todosRepo.updateTodo(id, userId, todoPatch);
     if (!row) throw new ServiceError("not_found");
-    return row;
+    if (shouldReplaceTags) {
+      const resolvedTagIds = await resolveTagIds(userId, {
+        tag_ids,
+        tags,
+      });
+      const ok = await todosRepo.replaceTodoTags(id, resolvedTagIds, userId);
+      if (!ok) throw new ServiceError("not_found");
+    }
+    const withTags = await todosRepo.getTodoWithTags(id, userId);
+    if (!withTags) throw new ServiceError("not_found");
+    return withTags;
   } catch (e) {
     return wrapRepo(e);
   }
@@ -209,6 +239,9 @@ export const attachTag = async (
   if ("tagId" in body) {
     tag = await tagsRepo.getTagById(body.tagId, userId);
     if (!tag) throw new ServiceError("not_found");
+  } else if ("tag_id" in body) {
+    tag = await tagsRepo.getTagById(body.tag_id, userId);
+    if (!tag) throw new ServiceError("not_found");
   } else {
     tag = await tagsRepo.findOrCreateByName(userId, body.name, body.color);
   }
@@ -227,6 +260,18 @@ export const detachTag = async (
 ): Promise<void> => {
   const ok = await todosRepo.detachTagFromTodo(todoId, tagId, userId);
   if (!ok) throw new ServiceError("not_found");
+};
+
+export const replaceTags = async (
+  userId: string,
+  todoId: string,
+  body: ReplaceTodoTagsInput
+): Promise<{ tags: tagsRepo.TagRow[]; tag_ids: string[] }> => {
+  const tagIds = await resolveTagIds(userId, body);
+  const ok = await todosRepo.replaceTodoTags(todoId, tagIds, userId);
+  if (!ok) throw new ServiceError("not_found");
+  const tags = await todosRepo.listTodoTags(todoId);
+  return { tags, tag_ids: tags.map((tag) => tag.id) };
 };
 
 export const listDayTopLevel = async (

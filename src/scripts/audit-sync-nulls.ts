@@ -72,7 +72,7 @@ async function main() {
     },
     {
       label: "checklist_run",
-      sql: "SELECT id, template_id, user_id, name, status, started_at, completed_at, created_at, updated_at, deleted_at FROM checklist_runs LIMIT 1",
+      sql: "SELECT id, template_id, user_id, name, status, started_at, completed_at, duration_ms, created_at, updated_at, deleted_at FROM checklist_runs LIMIT 1",
     },
     {
       label: "checklist_run_item",
@@ -88,7 +88,7 @@ async function main() {
       console.log(`\n  [${label}]`);
       const row = res.rows[0] as unknown as Record<string, unknown>;
       for (const [k, v] of Object.entries(row)) {
-        const flag = v === null && !["deleted_at", "completed_at", "note", "description", "name"].includes(k)
+        const flag = v === null && !["deleted_at", "completed_at", "duration_ms", "note", "description", "name"].includes(k)
           ? " ← ⚠️  should not be null"
           : "";
         console.log(`    ${k}: ${JSON.stringify(v)}${flag}`);

@@ -33,7 +33,7 @@ const REQUIRED_KEYS: Record<string, string[]> = {
   habit_logs: ["id", "habit_id", "log_date", "completed", "note", "created_at", "updated_at", "deleted_at"],
   checklist_template_orders: ["id", "user_id", "template_id", "sort_order", "created_at", "updated_at", "deleted_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "description", "is_required", "created_at", "updated_at", "deleted_at"],
-  checklist_runs: ["id", "template_id", "user_id", "name", "status", "started_at", "completed_at", "created_at", "updated_at", "deleted_at"],
+  checklist_runs: ["id", "template_id", "user_id", "name", "status", "started_at", "completed_at", "duration_ms", "created_at", "updated_at", "deleted_at"],
   checklist_run_items: ["id", "run_id", "template_item_id", "status", "completed_at", "note", "created_at", "updated_at", "deleted_at"],
 };
 
@@ -89,8 +89,8 @@ async function createTestData(userId: string): Promise<void> {
   const runId = newId();
   await turso.batch([
     {
-      sql: `INSERT INTO checklist_runs (id, template_id, user_id, name, status, started_at, completed_at, created_at, updated_at)
-            VALUES (?,?,?,NULL,'in_progress',?,NULL,?,?)`,
+      sql: `INSERT INTO checklist_runs (id, template_id, user_id, name, status, started_at, completed_at, duration_ms, created_at, updated_at)
+            VALUES (?,?,?,NULL,'in_progress',?,NULL,90000,?,?)`,
       args: [runId, tplId, userId, now, now, now],
     },
     {

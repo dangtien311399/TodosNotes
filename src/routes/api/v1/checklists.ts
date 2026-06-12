@@ -11,6 +11,7 @@ import {
   ReorderTemplatesSchema,
   ListTemplatesQuerySchema,
   StartRunSchema,
+  CompleteRunSchema,
   UpdateRunItemSchema,
   ListRunsQuerySchema,
 } from "../../../schemas/api/checklists.js";
@@ -317,9 +318,19 @@ export default async function checklistsRoutes(app: FastifyInstance) {
   );
 
   app.post<{ Params: { id: string } }>("/runs/:id/complete", async (req, reply) => {
+    const parsed = CompleteRunSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
     try {
-      await checklists.completeRun(req.userId, req.params.id);
-      return { status: "completed" };
+      const run = await checklists.completeRun(
+        req.userId,
+        req.params.id,
+        parsed.data
+      );
+      return { status: "completed", duration_ms: run.duration_ms };
     } catch (e) {
       return mapErr(e, reply);
     }

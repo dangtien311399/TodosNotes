@@ -24,6 +24,13 @@ export type TagSuggestionRow = {
   updated_at: string;
 };
 
+export type TagListScope = "todo" | "note" | "all";
+
+export type TagListRow = TagRow & {
+  usage_count: number;
+  last_used_at: string | null;
+};
+
 const mapRow = (row: Record<string, unknown>): TagRow => ({
   id: row.id as string,
   user_id: row.user_id as string,
@@ -44,8 +51,23 @@ const mapSuggestionRow = (row: Record<string, unknown>): TagSuggestionRow => ({
   updated_at: row.updated_at as string,
 });
 
+const mapListRow = (row: Record<string, unknown>): TagListRow => ({
+  ...mapRow(row),
+  usage_count: Number(row.usage_count ?? 0),
+  last_used_at: (row.last_used_at as string | null) ?? null,
+});
+
 const escapeLike = (value: string): string =>
   value.replace(/[\\%_]/g, (match) => `\\${match}`);
+
+export class TagRepoError extends Error {
+  constructor(public code: "duplicate" | "not_found") {
+    super(code);
+  }
+}
+
+export const normalizeTagName = (name: string): string =>
+  name.trim().replace(/\s+/g, " ");
 
 export const createTag = async (
   userId: string,
@@ -54,10 +76,11 @@ export const createTag = async (
 ): Promise<TagRow> => {
   const id = newId();
   const now = nowISO();
+  const normalizedName = normalizeTagName(name);
   await turso.execute({
     sql: `INSERT INTO tags (id, user_id, name, color, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?)`,
-    args: [id, userId, name, color, now, now],
+    args: [id, userId, normalizedName, color, now, now],
   });
   const row = await getTagById(id, userId);
   if (!row) throw new Error("createTag: row missing after insert");
@@ -80,9 +103,13 @@ export const findTagByName = async (
   userId: string,
   name: string
 ): Promise<TagRow | null> => {
+  const normalizedName = normalizeTagName(name);
   const res = await turso.execute({
-    sql: "SELECT * FROM tags WHERE user_id = ? AND name = ? AND deleted_at IS NULL",
-    args: [userId, name],
+    sql: `SELECT * FROM tags
+          WHERE user_id = ?
+            AND name = ? COLLATE NOCASE
+            AND deleted_at IS NULL`,
+    args: [userId, normalizedName],
   });
   if (res.rows.length === 0) return null;
   return mapRow(res.rows[0] as unknown as Record<string, unknown>);
@@ -98,12 +125,124 @@ export const findOrCreateByName = async (
   return createTag(userId, name, color);
 };
 
-export const listTagsByUser = async (userId: string): Promise<TagRow[]> => {
+export const listTagsByUser = async (
+  userId: string,
+  opts: { scope?: TagListScope; limit?: number; q?: string } = {}
+): Promise<TagListRow[]> => {
+  const scope = opts.scope ?? "all";
+  const args: (string | number)[] = [userId];
+  const nameFilter = opts.q ? "AND g.name LIKE ? ESCAPE '\\'" : "";
+  if (opts.q) args.push(`%${escapeLike(normalizeTagName(opts.q))}%`);
+  args.push(opts.limit ?? 100);
+
+  if (scope === "todo") {
+    const res = await turso.execute({
+      sql: `SELECT
+              g.*,
+              COUNT(t.id) AS usage_count,
+              MAX(t.updated_at) AS last_used_at
+            FROM tags g
+            LEFT JOIN todo_tags tt ON tt.tag_id = g.id
+            LEFT JOIN todos t
+              ON t.id = tt.todo_id
+             AND t.user_id = g.user_id
+             AND t.deleted_at IS NULL
+            WHERE g.user_id = ?
+              AND g.deleted_at IS NULL
+              ${nameFilter}
+            GROUP BY g.id
+            ORDER BY usage_count DESC, last_used_at DESC, g.name COLLATE NOCASE ASC
+            LIMIT ?`,
+      args,
+    });
+    return (res.rows as unknown as Record<string, unknown>[]).map(mapListRow);
+  }
+
+  if (scope === "note") {
+    const res = await turso.execute({
+      sql: `SELECT
+              g.*,
+              COUNT(n.id) AS usage_count,
+              MAX(n.updated_at) AS last_used_at
+            FROM tags g
+            LEFT JOIN note_tags nt ON nt.tag_id = g.id
+            LEFT JOIN notes n
+              ON n.id = nt.note_id
+             AND n.user_id = g.user_id
+             AND n.deleted_at IS NULL
+            WHERE g.user_id = ?
+              AND g.deleted_at IS NULL
+              ${nameFilter}
+            GROUP BY g.id
+            ORDER BY usage_count DESC, last_used_at DESC, g.name COLLATE NOCASE ASC
+            LIMIT ?`,
+      args,
+    });
+    return (res.rows as unknown as Record<string, unknown>[]).map(mapListRow);
+  }
+
   const res = await turso.execute({
-    sql: "SELECT * FROM tags WHERE user_id = ? AND deleted_at IS NULL ORDER BY name ASC",
-    args: [userId],
+    sql: `SELECT
+            g.*,
+            (
+              COUNT(DISTINCT t.id) + COUNT(DISTINCT n.id)
+            ) AS usage_count,
+            MAX(COALESCE(t.updated_at, n.updated_at)) AS last_used_at
+          FROM tags g
+          LEFT JOIN todo_tags tt ON tt.tag_id = g.id
+          LEFT JOIN todos t
+            ON t.id = tt.todo_id
+           AND t.user_id = g.user_id
+           AND t.deleted_at IS NULL
+          LEFT JOIN note_tags nt ON nt.tag_id = g.id
+          LEFT JOIN notes n
+            ON n.id = nt.note_id
+           AND n.user_id = g.user_id
+           AND n.deleted_at IS NULL
+          WHERE g.user_id = ?
+            AND g.deleted_at IS NULL
+            ${nameFilter}
+          GROUP BY g.id
+          ORDER BY usage_count DESC, last_used_at DESC, g.name COLLATE NOCASE ASC
+          LIMIT ?`,
+    args,
   });
-  return (res.rows as unknown as Record<string, unknown>[]).map(mapRow);
+  return (res.rows as unknown as Record<string, unknown>[]).map(mapListRow);
+};
+
+export const updateTag = async (
+  id: string,
+  userId: string,
+  patch: { name?: string; color?: string }
+): Promise<TagRow | null> => {
+  const current = await getTagById(id, userId);
+  if (!current) return null;
+
+  const sets: string[] = [];
+  const args: (string | number | null)[] = [];
+  if (patch.name !== undefined) {
+    const normalizedName = normalizeTagName(patch.name);
+    const existing = await findTagByName(userId, normalizedName);
+    if (existing && existing.id !== id) throw new TagRepoError("duplicate");
+    sets.push("name = ?");
+    args.push(normalizedName);
+  }
+  if (patch.color !== undefined) {
+    sets.push("color = ?");
+    args.push(patch.color);
+  }
+
+  if (sets.length === 0) return current;
+  sets.push("updated_at = ?");
+  args.push(nowISO(), id, userId);
+
+  const res = await turso.execute({
+    sql: `UPDATE tags SET ${sets.join(", ")}
+          WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    args,
+  });
+  if (res.rowsAffected === 0) return null;
+  return getTagById(id, userId);
 };
 
 export const listTagSuggestions = async (

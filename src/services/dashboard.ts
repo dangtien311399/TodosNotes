@@ -1,5 +1,7 @@
 import * as dashRepo from "../repositories/dashboard.js";
+import { listTagsForTodoIds } from "../repositories/todos.js";
 import { daysInRange, todayDate } from "../utils/time.js";
+import type { TagRow } from "../repositories/tags.js";
 import type {
   TodayQueryInput,
   CalendarOverviewQueryInput,
@@ -139,6 +141,8 @@ export type EisenhowerTodo = {
   is_frog: boolean;
   frog_date: string | null;
   quadrant: Quadrant;
+  tags: TagRow[];
+  tag_ids: string[];
 };
 
 export type EisenhowerByQuadrant = {
@@ -148,7 +152,10 @@ export type EisenhowerByQuadrant = {
   q4: EisenhowerTodo[];
 };
 
-const toEisenhowerTodo = (t: dashRepo.DayTodoStat): EisenhowerTodo => {
+const toEisenhowerTodo = (
+  t: dashRepo.DayTodoStat,
+  tags: TagRow[] = []
+): EisenhowerTodo => {
   const quadrant = quadrantOf(t.is_important, t.is_urgent);
   return {
     id: t.id,
@@ -160,6 +167,8 @@ const toEisenhowerTodo = (t: dashRepo.DayTodoStat): EisenhowerTodo => {
     is_frog: t.is_frog === 1,
     frog_date: t.frog_date,
     quadrant,
+    tags,
+    tag_ids: tags.map((tag) => tag.id),
   };
 };
 
@@ -180,10 +189,11 @@ export const getEisenhower = async (
     q4: [],
   };
   const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
+  const tagMap = await listTagsForTodoIds(todos.map((todo) => todo.id));
   for (const t of todos) {
     if (t.status === "done") continue;
     const q = quadrantOf(t.is_important, t.is_urgent);
-    by_quadrant[q].push(toEisenhowerTodo(t));
+    by_quadrant[q].push(toEisenhowerTodo(t, tagMap.get(t.id) ?? []));
     counts[q]++;
   }
   return { date, counts, by_quadrant };

@@ -13,6 +13,7 @@ import type {
   ReorderTemplatesInput,
   ListTemplatesQueryInput,
   StartRunInput,
+  CompleteRunInput,
   UpdateRunItemInput,
   ListRunsQueryInput,
 } from "../schemas/api/checklists.js";
@@ -316,11 +317,15 @@ export const updateRunItem = async (
   return updated;
 };
 
-export const completeRun = async (userId: string, id: string): Promise<void> => {
+export const completeRun = async (
+  userId: string,
+  id: string,
+  body: CompleteRunInput
+): Promise<runsRepo.RunRow> => {
   try {
-    await runsRepo.completeRun(id, userId);
+    return await runsRepo.completeRun(id, userId, body.duration_ms ?? null);
   } catch (e) {
-    wrapRun(e);
+    return wrapRun(e);
   }
 };
 

@@ -8,6 +8,7 @@ import {
   ClassifyEisenhowerSchema,
   MoveToDaySchema,
   AttachTagSchema,
+  ReplaceTodoTagsSchema,
 } from "../../../schemas/api/todos.js";
 import * as todos from "../../../services/todos.js";
 
@@ -212,6 +213,21 @@ export default async function todosRoutes(app: FastifyInstance) {
     try {
       const tag = await todos.attachTag(req.userId, req.params.id, parsed.data);
       return reply.code(201).send({ tag });
+    } catch (e) {
+      return mapErr(e, reply);
+    }
+  });
+
+  // PUT /:id/tags
+  app.put<{ Params: { id: string } }>("/:id/tags", async (req, reply) => {
+    const parsed = ReplaceTodoTagsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    try {
+      return await todos.replaceTags(req.userId, req.params.id, parsed.data);
     } catch (e) {
       return mapErr(e, reply);
     }

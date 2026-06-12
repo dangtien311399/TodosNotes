@@ -27,6 +27,7 @@ export const CreateTodoSchema = z.object({
   trigger_after_todo_id: z.uuid().nullable().optional(),
   position: z.number().int().min(0).optional(),
   tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+  tag_ids: z.array(z.uuid()).max(20).optional(),
   // ── Recurrence (migration 0006) ─────────────────────────────────────────────
   recurrence_type: z.enum(["daily", "weekly", "custom"]).nullable().optional(),
   recurrence_interval: RecurrenceInterval.nullable().optional(),
@@ -36,7 +37,7 @@ export const CreateTodoSchema = z.object({
 });
 export type CreateTodoInput = z.infer<typeof CreateTodoSchema>;
 
-export const UpdateTodoSchema = CreateTodoSchema.partial().omit({ tags: true }).extend({
+export const UpdateTodoSchema = CreateTodoSchema.partial().extend({
   actual_minutes: Minutes.nullable().optional(),
 });
 export type UpdateTodoInput = z.infer<typeof UpdateTodoSchema>;
@@ -50,6 +51,7 @@ export const ListTodosQuerySchema = z.object({
   parent_id: z.string().optional(), // "null" → top-level only; uuid → children
   q: z.string().trim().min(1).max(200).optional(),
   tag: z.string().trim().min(1).max(64).optional(),
+  tag_id: z.uuid().optional(),
 });
 export type ListTodosQueryInput = z.infer<typeof ListTodosQuerySchema>;
 
@@ -72,6 +74,7 @@ export type MoveToDayInput = z.infer<typeof MoveToDaySchema>;
 
 export const AttachTagSchema = z.union([
   z.object({ tagId: z.uuid() }),
+  z.object({ tag_id: z.uuid() }),
   z.object({
     name: z.string().trim().min(1).max(64),
     color: z
@@ -81,3 +84,9 @@ export const AttachTagSchema = z.union([
   }),
 ]);
 export type AttachTagInput = z.infer<typeof AttachTagSchema>;
+
+export const ReplaceTodoTagsSchema = z.object({
+  tag_ids: z.array(z.uuid()).max(20).optional(),
+  tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+});
+export type ReplaceTodoTagsInput = z.infer<typeof ReplaceTodoTagsSchema>;

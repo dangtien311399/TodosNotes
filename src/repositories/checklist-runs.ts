@@ -10,6 +10,7 @@ export type RunRow = {
   status: "in_progress" | "completed" | "abandoned";
   started_at: string;
   completed_at: string | null;
+  duration_ms: number | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -35,7 +36,7 @@ export type RunItemDetail = RunItemRow & {
 };
 
 const RUN_COLUMNS =
-  "id, template_id, user_id, name, status, started_at, completed_at, created_at, updated_at, deleted_at";
+  "id, template_id, user_id, name, status, started_at, completed_at, duration_ms, created_at, updated_at, deleted_at";
 
 const mapRun = (row: Record<string, unknown>): RunRow => ({
   id: row.id as string,
@@ -45,6 +46,9 @@ const mapRun = (row: Record<string, unknown>): RunRow => ({
   status: row.status as RunRow["status"],
   started_at: row.started_at as string,
   completed_at: (row.completed_at as string | null) ?? null,
+  duration_ms: row.duration_ms === null || row.duration_ms === undefined
+    ? null
+    : Number(row.duration_ms),
   created_at: (row.created_at as string | null) ?? (row.started_at as string),
   updated_at: (row.updated_at as string | null) ?? (row.started_at as string),
   deleted_at: (row.deleted_at as string | null) ?? null,
@@ -156,6 +160,7 @@ export const listRunItems = async (runId: string): Promise<RunItemDetail[]> => {
 
 export type ListRunsOpts = {
   status?: RunRow["status"];
+  template_id?: string;
   cursor?: string;
   limit: number;
 };
@@ -182,6 +187,10 @@ export const listRunsByUser = async (
   if (opts.status) {
     where.push("status = ?");
     args.push(opts.status);
+  }
+  if (opts.template_id) {
+    where.push("template_id = ?");
+    args.push(opts.template_id);
   }
   if (opts.cursor) {
     const c = decodeCursor(opts.cursor);
@@ -240,11 +249,12 @@ export const updateRunItem = async (
 
 export const completeRun = async (
   id: string,
-  userId: string
-): Promise<boolean> => {
+  userId: string,
+  durationMs: number | null = null
+): Promise<RunRow> => {
   const run = await getRunById(id, userId);
   if (!run) throw new RunRepoError("not_found");
-  if (run.status === "completed") return true; // idempotent
+  if (run.status === "completed") return run; // idempotent; do not overwrite duration
   // Check required items chưa pending
   const check = await turso.execute({
     sql: `SELECT COUNT(*) AS c FROM checklist_run_items ri
@@ -258,11 +268,14 @@ export const completeRun = async (
   if (pendingRequired > 0) throw new RunRepoError("incomplete_required");
   const now = nowISO();
   await turso.execute({
-    sql: `UPDATE checklist_runs SET status = 'completed', completed_at = ?, updated_at = ?
+    sql: `UPDATE checklist_runs
+          SET status = 'completed', completed_at = ?, duration_ms = ?, updated_at = ?
           WHERE id = ? AND user_id = ?`,
-    args: [now, now, id, userId],
+    args: [now, durationMs, now, id, userId],
   });
-  return true;
+  const updated = await getRunById(id, userId);
+  if (!updated) throw new RunRepoError("not_found");
+  return updated;
 };
 
 export const abandonRun = async (

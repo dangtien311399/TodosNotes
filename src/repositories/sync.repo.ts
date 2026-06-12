@@ -704,20 +704,21 @@ export const upsertEntity = async (
     case "checklist_run": {
       await turso.execute({
         sql: `INSERT INTO checklist_runs
-              (id, template_id, user_id, name, status, started_at, completed_at,
-               created_at, updated_at, deleted_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?)
-              ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                status = excluded.status,
-                started_at = excluded.started_at,
-                completed_at = excluded.completed_at,
-                updated_at = excluded.updated_at,
-                deleted_at = excluded.deleted_at`,
+               (id, template_id, user_id, name, status, started_at, completed_at,
+                duration_ms, created_at, updated_at, deleted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 status = excluded.status,
+                 started_at = excluded.started_at,
+                 completed_at = excluded.completed_at,
+                 duration_ms = excluded.duration_ms,
+                 updated_at = excluded.updated_at,
+                 deleted_at = excluded.deleted_at`,
         args: dbArgs([
           p.id, p.template_id, userId, p.name ?? null,
           p.status ?? "in_progress", p.started_at ?? now, p.completed_at ?? null,
-          createdAt, updatedAt, deletedAt,
+          p.duration_ms ?? null, createdAt, updatedAt, deletedAt,
         ]),
       });
       break;

@@ -536,11 +536,34 @@ export type ListOpts = {
   parent_id?: string; // "null" → top-level, uuid → children
   q?: string;
   tag?: string;
+  tag_id?: string;
 };
 
+export type TodoTagFields = {
+  tags: TagRow[];
+  tag_ids: string[];
+};
+
+export type TodoWithTags = TodoRow & TodoTagFields;
+
 export type ListResult = {
-  rows: TodoRow[];
+  rows: TodoWithTags[];
   nextCursor: string | null;
+};
+
+const attachTagsToRows = async <T extends TodoRow>(
+  rows: T[]
+): Promise<(T & TodoTagFields)[]> => {
+  if (rows.length === 0) return [];
+  const tagMap = await listTagsForTodoIds(rows.map((row) => row.id));
+  return rows.map((row) => {
+    const tags = tagMap.get(row.id) ?? [];
+    return {
+      ...row,
+      tags,
+      tag_ids: tags.map((tag) => tag.id),
+    };
+  });
 };
 
 export const listTodosByUser = async (
@@ -585,10 +608,15 @@ export const listTodosByUser = async (
     const pattern = `%${opts.q}%`;
     args.push(pattern, pattern);
   }
-  if (opts.tag) {
+  if (opts.tag_id) {
     join =
       "JOIN todo_tags tt ON tt.todo_id = t.id JOIN tags g ON g.id = tt.tag_id AND g.deleted_at IS NULL";
-    where.push("g.name = ?");
+    where.push("g.id = ? AND g.user_id = ?");
+    args.push(opts.tag_id, userId);
+  } else if (opts.tag) {
+    join =
+      "JOIN todo_tags tt ON tt.todo_id = t.id JOIN tags g ON g.id = tt.tag_id AND g.deleted_at IS NULL";
+    where.push("g.name = ? COLLATE NOCASE");
     args.push(opts.tag);
   }
 
@@ -617,10 +645,10 @@ export const listTodosByUser = async (
     const last = rows[rows.length - 1];
     nextCursor = encodeCursor({ updated_at: last.updated_at, id: last.id });
   }
-  return { rows, nextCursor };
+  return { rows: await attachTagsToRows(rows), nextCursor };
 };
 
-export type DayTopLevelRow = TodoRow & { has_subtasks: number };
+export type DayTopLevelRow = TodoRow & TodoTagFields & { has_subtasks: number };
 
 export const listDayTopLevel = async (
   userId: string,
@@ -638,10 +666,11 @@ export const listDayTopLevel = async (
           ORDER BY t.is_frog DESC, t.position ASC, t.updated_at DESC`,
     args: [userId, date],
   });
-  return (res.rows as unknown as Record<string, unknown>[]).map((r) => ({
+  const rows = (res.rows as unknown as Record<string, unknown>[]).map((r) => ({
     ...mapRow(r),
     has_subtasks: Number(r.has_subtasks),
   }));
+  return attachTagsToRows(rows);
 };
 
 export const listSubtasks = async (
@@ -742,13 +771,100 @@ export const detachTagFromTodo = async (
   return (res[0].rowsAffected ?? 0) > 0;
 };
 
+export const replaceTodoTags = async (
+  todoId: string,
+  tagIds: string[],
+  userId: string
+): Promise<boolean> => {
+  const uniqueTagIds = [...new Set(tagIds)];
+  const todoRes = await turso.execute({
+    sql: "SELECT id FROM todos WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [todoId, userId],
+  });
+  if (todoRes.rows.length === 0) return false;
+
+  if (uniqueTagIds.length > 0) {
+    const placeholders = uniqueTagIds.map(() => "?").join(", ");
+    const tagRes = await turso.execute({
+      sql: `SELECT COUNT(*) AS c FROM tags
+            WHERE user_id = ?
+              AND deleted_at IS NULL
+              AND id IN (${placeholders})`,
+      args: [userId, ...uniqueTagIds],
+    });
+    if (Number((tagRes.rows[0] as unknown as Record<string, unknown>).c) !== uniqueTagIds.length) {
+      return false;
+    }
+  }
+
+  const now = nowISO();
+  const stmts: { sql: string; args: (string | number | null)[] }[] = [
+    {
+      sql: "DELETE FROM todo_tags WHERE todo_id = ?",
+      args: [todoId],
+    },
+    ...uniqueTagIds.map((tagId) => ({
+      sql: "INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)",
+      args: [todoId, tagId] as (string | number | null)[],
+    })),
+    {
+      sql: "UPDATE todos SET updated_at = ? WHERE id = ?",
+      args: [now, todoId],
+    },
+  ];
+  await turso.batch(stmts, "write");
+  return true;
+};
+
+export const listTagsForTodoIds = async (
+  todoIds: string[]
+): Promise<Map<string, TagRow[]>> => {
+  const map = new Map<string, TagRow[]>();
+  if (todoIds.length === 0) return map;
+  const placeholders = todoIds.map(() => "?").join(", ");
+  const res = await turso.execute({
+    sql: `SELECT
+            tt.todo_id,
+            g.id,
+            g.user_id,
+            g.name,
+            g.color,
+            g.created_at,
+            g.updated_at,
+            g.deleted_at
+          FROM todo_tags tt
+          JOIN tags g ON g.id = tt.tag_id
+          WHERE tt.todo_id IN (${placeholders})
+            AND g.deleted_at IS NULL
+          ORDER BY g.name COLLATE NOCASE ASC`,
+    args: todoIds,
+  });
+  for (const row of res.rows as unknown as Record<string, unknown>[]) {
+    const todoId = row.todo_id as string;
+    const tags = map.get(todoId) ?? [];
+    tags.push(mapTagRow(row));
+    map.set(todoId, tags);
+  }
+  return map;
+};
+
+export const getTodoWithTags = async (
+  id: string,
+  userId: string
+): Promise<TodoWithTags | null> => {
+  const todo = await getTodoByIdScoped(id, userId);
+  if (!todo) return null;
+  const rows = await attachTagsToRows([todo]);
+  return rows[0] ?? null;
+};
+
 export const listTodoTags = async (todoId: string): Promise<TagRow[]> => {
   const res = await turso.execute({
     sql: `SELECT g.id, g.user_id, g.name, g.color, g.created_at, g.updated_at, g.deleted_at
           FROM todo_tags tt
           JOIN tags g ON g.id = tt.tag_id
           WHERE tt.todo_id = ? AND g.deleted_at IS NULL
-          ORDER BY g.name ASC`,
+          ORDER BY g.name COLLATE NOCASE ASC`,
     args: [todoId],
   });
   return (res.rows as unknown as Record<string, unknown>[]).map(mapTagRow);
@@ -763,6 +879,7 @@ export type LinkedNote = { id: string; title: string };
 export type TodoWithRelations = {
   todo: TodoRow;
   tags: TagRow[];
+  tag_ids: string[];
   subtasks: TodoRow[];
   linked_notes: LinkedNote[];
 };
@@ -787,5 +904,5 @@ export const getTodoWithRelations = async (
   const linked_notes = (linkedNotesRes.rows as unknown as Record<string, unknown>[]).map(
     (r) => ({ id: r.id as string, title: r.title as string })
   );
-  return { todo, tags, subtasks, linked_notes };
+  return { todo, tags, tag_ids: tags.map((tag) => tag.id), subtasks, linked_notes };
 };
