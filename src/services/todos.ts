@@ -1,5 +1,6 @@
 import * as todosRepo from "../repositories/todos.js";
 import * as tagsRepo from "../repositories/tags.js";
+import { addDays } from "../utils/time.js";
 import type {
   CreateTodoInput,
   UpdateTodoInput,
@@ -30,6 +31,89 @@ const wrapRepo = (e: unknown): never => {
     throw new ServiceError(e.code);
   }
   throw e;
+};
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const safeInterval = (interval: number | null): number =>
+  interval !== null && interval > 0 ? interval : 1;
+
+const isoWeekday = (date: string): number | null => {
+  if (!ISO_DATE_RE.test(date)) return null;
+  const d = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  const day = d.getUTCDay();
+  return day === 0 ? 7 : day;
+};
+
+const parseWeekdays = (raw: string | null): number[] => {
+  if (!raw) return [];
+  return [...new Set(
+    raw
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isInteger(v) && v >= 1 && v <= 7)
+  )].sort((a, b) => a - b);
+};
+
+const nextRecurrenceDate = (todo: todosRepo.TodoRow): string | null => {
+  if (!todo.recurrence_type || !todo.scheduled_date) return null;
+  if (!ISO_DATE_RE.test(todo.scheduled_date)) return null;
+
+  const interval = safeInterval(todo.recurrence_interval);
+  let nextDate: string;
+  if (todo.recurrence_type === "weekly") {
+    const weekdays = parseWeekdays(todo.recurrence_days_of_week);
+    const currentWeekday = isoWeekday(todo.scheduled_date);
+    if (currentWeekday === null) return null;
+
+    if (weekdays.length === 0) {
+      nextDate = addDays(todo.scheduled_date, interval * 7);
+    } else {
+      const laterThisWeek = weekdays.find((day) => day > currentWeekday);
+      if (laterThisWeek !== undefined) {
+        nextDate = addDays(todo.scheduled_date, laterThisWeek - currentWeekday);
+      } else {
+        nextDate = addDays(
+          todo.scheduled_date,
+          7 - currentWeekday + (interval - 1) * 7 + weekdays[0]
+        );
+      }
+    }
+  } else {
+    nextDate = addDays(todo.scheduled_date, interval);
+  }
+
+  if (
+    todo.recurrence_end_date &&
+    ISO_DATE_RE.test(todo.recurrence_end_date) &&
+    nextDate > todo.recurrence_end_date
+  ) {
+    return null;
+  }
+  return nextDate;
+};
+
+const createNextRecurringTodo = async (
+  userId: string,
+  source: todosRepo.TodoRow
+): Promise<todosRepo.TodoRow | null> => {
+  const scheduledDate = nextRecurrenceDate(source);
+  if (!scheduledDate) return null;
+
+  const recurrenceTemplateId = source.recurrence_template_id ?? source.id;
+  const existing = await todosRepo.findRecurringOccurrenceByDate(
+    userId,
+    recurrenceTemplateId,
+    scheduledDate
+  );
+  if (existing) return existing;
+
+  return todosRepo.createNextRecurringTodo(
+    source,
+    scheduledDate,
+    recurrenceTemplateId
+  );
 };
 
 const resolveTagIds = async (
@@ -164,11 +248,20 @@ export const completeTodo = async (
   userId: string,
   id: string,
   body: CompleteTodoInput
-): Promise<{ todo: todosRepo.TodoRow; triggered_todos: todosRepo.TodoRow[] }> => {
-  const todo = await todosRepo.completeTodo(id, userId, body.actual_minutes);
-  if (!todo) throw new ServiceError("not_found");
+): Promise<{
+  todo: todosRepo.TodoRow;
+  triggered_todos: todosRepo.TodoRow[];
+  next_recurring_todo: todosRepo.TodoRow | null;
+}> => {
+  const result = await todosRepo.completeTodo(id, userId, body.actual_minutes);
+  if (!result) throw new ServiceError("not_found");
+  const { todo, completedNow } = result;
+  const next_recurring_todo =
+    completedNow && todo.recurrence_type
+      ? await createNextRecurringTodo(userId, todo)
+      : null;
   const triggered_todos = await todosRepo.listTriggeredTodos(id, userId);
-  return { todo, triggered_todos };
+  return { todo, triggered_todos, next_recurring_todo };
 };
 
 export const uncompleteTodo = async (

@@ -388,7 +388,7 @@ export const completeTodo = async (
   id: string,
   userId: string,
   actualMinutes?: number | null
-): Promise<TodoRow | null> => {
+): Promise<{ todo: TodoRow; completedNow: boolean } | null> => {
   const now = nowISO();
   const sets = ["status = 'done'", "completed_at = ?", "updated_at = ?"];
   const args: (string | number | null)[] = [now, now];
@@ -399,11 +399,106 @@ export const completeTodo = async (
   args.push(id, userId);
   const res = await turso.execute({
     sql: `UPDATE todos SET ${sets.join(", ")}
-          WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+          WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+            AND status != 'done'`,
     args,
   });
-  if (res.rowsAffected === 0) return null;
-  return getTodoByIdScoped(id, userId);
+  if (res.rowsAffected > 0) {
+    const todo = await getTodoByIdScoped(id, userId);
+    return todo ? { todo, completedNow: true } : null;
+  }
+
+  const existing = await getTodoByIdScoped(id, userId);
+  if (!existing) return null;
+  if (existing.status === "done" && actualMinutes !== undefined) {
+    const actualUpdatedAt = nowISO();
+    await turso.execute({
+      sql: `UPDATE todos
+            SET actual_minutes = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+      args: [actualMinutes, actualUpdatedAt, id, userId],
+    });
+    const updated = await getTodoByIdScoped(id, userId);
+    return updated ? { todo: updated, completedNow: false } : null;
+  }
+  return { todo: existing, completedNow: false };
+};
+
+export const findRecurringOccurrenceByDate = async (
+  userId: string,
+  recurrenceTemplateId: string,
+  scheduledDate: string
+): Promise<TodoRow | null> => {
+  const res = await turso.execute({
+    sql: `SELECT ${TODO_COLUMNS} FROM todos
+          WHERE user_id = ?
+            AND deleted_at IS NULL
+            AND scheduled_date = ?
+            AND recurrence_type IS NOT NULL
+            AND COALESCE(recurrence_template_id, id) = ?
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1`,
+    args: [userId, scheduledDate, recurrenceTemplateId],
+  });
+  if (res.rows.length === 0) return null;
+  return mapRow(res.rows[0] as unknown as Record<string, unknown>);
+};
+
+export const createNextRecurringTodo = async (
+  source: TodoRow,
+  scheduledDate: string,
+  recurrenceTemplateId: string
+): Promise<TodoRow> => {
+  const id = newId();
+  const now = nowISO();
+  await turso.batch(
+    [
+      {
+        sql: `INSERT INTO todos
+              (id, user_id, parent_id, title, description, status, position,
+               is_frog, frog_date, is_important, is_urgent,
+               estimated_minutes, actual_minutes, start_at, due_at, scheduled_date,
+               trigger_after_todo_id, completed_at,
+               recurrence_type, recurrence_interval, recurrence_days_of_week,
+               recurrence_end_date, recurrence_template_id,
+               created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          id,
+          source.user_id,
+          source.parent_id,
+          source.title,
+          source.description,
+          source.position,
+          source.is_frog,
+          source.frog_date,
+          source.is_important,
+          source.is_urgent,
+          source.estimated_minutes,
+          source.start_at,
+          source.due_at,
+          scheduledDate,
+          source.trigger_after_todo_id,
+          source.recurrence_type,
+          source.recurrence_interval,
+          source.recurrence_days_of_week,
+          source.recurrence_end_date,
+          recurrenceTemplateId,
+          now,
+          now,
+        ],
+      },
+      {
+        sql: `INSERT INTO todo_tags (todo_id, tag_id)
+              SELECT ?, tag_id FROM todo_tags WHERE todo_id = ?`,
+        args: [id, source.id],
+      },
+    ],
+    "write"
+  );
+  const row = await getTodoById(id);
+  if (!row) throw new Error("createNextRecurringTodo: row missing after insert");
+  return row;
 };
 
 export const uncompleteTodo = async (
