@@ -1,6 +1,7 @@
 import * as todosRepo from "../repositories/todos.js";
 import * as tagsRepo from "../repositories/tags.js";
 import { addDays } from "../utils/time.js";
+import { autoLogHabitForCompletedTodo } from "./todo-habit-logs.js";
 import type {
   CreateTodoInput,
   UpdateTodoInput,
@@ -19,6 +20,7 @@ export class ServiceError extends Error {
       | "not_found"
       | "invalid_parent"
       | "invalid_trigger"
+      | "invalid_habit"
       | "cycle"
       | "duplicate"
   ) {
@@ -154,6 +156,7 @@ export const createTodo = async (
       start_at: input.start_at ?? null,
       due_at: input.due_at ?? null,
       trigger_after_todo_id: input.trigger_after_todo_id ?? null,
+      habit_id: input.habit_id ?? null,
       position: input.position,
       recurrence_type: input.recurrence_type ?? null,
       recurrence_interval: input.recurrence_interval,
@@ -193,6 +196,7 @@ export const listTodos = async (
     q: query.q,
     tag: query.tag,
     tag_id: query.tag_id,
+    habit_id: query.habit_id,
   });
   // Type guard: với opts object trả ListResult; với number trả array. Ở đây luôn object.
   if (Array.isArray(result)) {
@@ -260,6 +264,9 @@ export const completeTodo = async (
     completedNow && todo.recurrence_type
       ? await createNextRecurringTodo(userId, todo)
       : null;
+  if (completedNow) {
+    await autoLogHabitForCompletedTodo(userId, todo);
+  }
   const triggered_todos = await todosRepo.listTriggeredTodos(id, userId);
   return { todo, triggered_todos, next_recurring_todo };
 };

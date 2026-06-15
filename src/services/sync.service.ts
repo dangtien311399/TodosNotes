@@ -14,6 +14,9 @@
 import { nowISO } from "../utils/time.js";
 import { fromSyncEntity } from "../sync/sync-serializer.js";
 import type { SyncOp } from "../schemas/api/sync.js";
+import * as habitsRepo from "../repositories/habits.js";
+import * as todosRepo from "../repositories/todos.js";
+import { autoLogHabitForCompletedTodo } from "./todo-habit-logs.js";
 import {
   getEntityInfo,
   isSystemTemplate,
@@ -27,6 +30,9 @@ import {
   softDeleteEntity,
   reconcileJunctions,
 } from "../repositories/sync.repo.js";
+
+const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
 
 // ── Result type ───────────────────────────────────────────────────────────────
 
@@ -79,6 +85,19 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
     ) {
       return { id, status: "error", error: "bad_input" };
     }
+  }
+
+  if (
+    type === "todo" &&
+    opType !== "delete" &&
+    hasOwn(payload, "habit_id") &&
+    payload.habit_id !== null
+  ) {
+    if (typeof payload.habit_id !== "string") {
+      return { id, status: "error", error: "bad_input" };
+    }
+    const habit = await habitsRepo.getHabitById(payload.habit_id, userId);
+    if (!habit) return { id, status: "error", error: "invalid_habit" };
   }
 
   // ── §5.3 Strip server-only fields + convert booleans ─────────────────────
@@ -184,6 +203,11 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
   }
 
   // ── Apply ─────────────────────────────────────────────────────────────────
+  const beforeTodo =
+    type === "todo" && opType !== "delete"
+      ? await todosRepo.getTodoByIdScoped(id, userId)
+      : null;
+
   if (opType === "delete") {
     const delAt = (payload.deleted_at as string | undefined) ?? nowISO();
     await softDeleteEntity(type, id, delAt);
@@ -203,6 +227,13 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
         (payload.linked_todo_ids as unknown[] | undefined)?.length;
       if (opType !== "create" || hasJunctions) {
         await reconcileJunctions(type, id, userId, payload);
+      }
+    }
+
+    if (type === "todo") {
+      const afterTodo = await todosRepo.getTodoByIdScoped(id, userId);
+      if (afterTodo?.status === "done" && beforeTodo?.status !== "done") {
+        await autoLogHabitForCompletedTodo(userId, afterTodo);
       }
     }
   }

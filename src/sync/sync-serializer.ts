@@ -58,6 +58,7 @@ export type SyncTodo = {
   due_at: string | null;
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
+  habit_id: string | null;
   completed_at: string | null;
   // Recurrence fields (migration 0006)
   recurrence_type: "daily" | "weekly" | "custom" | null;

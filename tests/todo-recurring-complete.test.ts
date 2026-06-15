@@ -28,6 +28,7 @@ const TODO_COLUMNS = [
   "due_at",
   "scheduled_date",
   "trigger_after_todo_id",
+  "habit_id",
   "completed_at",
   "recurrence_type",
   "recurrence_interval",
@@ -64,6 +65,7 @@ const insertTodo = async (
     due_at: "2026-06-15T09:00:00.000Z",
     scheduled_date: "2026-06-15",
     trigger_after_todo_id: null,
+    habit_id: null,
     completed_at: null,
     recurrence_type: "daily",
     recurrence_interval: 2,
@@ -140,6 +142,7 @@ before(async () => {
       due_at TEXT,
       scheduled_date TEXT,
       trigger_after_todo_id TEXT,
+      habit_id TEXT,
       completed_at TEXT,
       recurrence_type TEXT,
       recurrence_interval INTEGER,
@@ -199,6 +202,7 @@ test("completing a daily recurring todo creates exactly one next occurrence", as
   assert.equal(next.actual_minutes, null);
   assert.equal(next.scheduled_date, "2026-06-17");
   assert.equal(next.due_at, "2026-06-15T09:00:00.000Z");
+  assert.equal(next.habit_id, null);
   assert.equal(next.recurrence_type, "daily");
   assert.equal(next.recurrence_interval, 2);
   assert.equal(next.recurrence_template_id, "todo-daily");

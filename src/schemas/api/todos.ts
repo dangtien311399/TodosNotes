@@ -25,6 +25,7 @@ export const CreateTodoSchema = z.object({
   start_at: IsoDT.nullable().optional(),
   due_at: IsoDT.nullable().optional(),
   trigger_after_todo_id: z.uuid().nullable().optional(),
+  habit_id: z.uuid().nullable().optional(),
   position: z.number().int().min(0).optional(),
   tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   tag_ids: z.array(z.uuid()).max(20).optional(),
@@ -52,6 +53,7 @@ export const ListTodosQuerySchema = z.object({
   q: z.string().trim().min(1).max(200).optional(),
   tag: z.string().trim().min(1).max(64).optional(),
   tag_id: z.uuid().optional(),
+  habit_id: z.uuid().optional(),
 });
 export type ListTodosQueryInput = z.infer<typeof ListTodosQuerySchema>;
 

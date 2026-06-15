@@ -9,10 +9,11 @@ import type {
 } from "../schemas/api/dashboard.js";
 
 // ============================================================
-// Score formula (Eisenhower-weighted + frog bonus)
+// Score formula (flat todo base + mark bonuses)
 // ============================================================
 
-const W = { Q1: 4, Q2: 3, Q3: 2, Q4: 1, FROG_BONUS: 2, HABIT: 0.5 };
+const SCORE_BASE = 100;
+const TODO_BONUS = { FROG: 10, IMPORTANT: 5 };
 
 type Quadrant = "q1" | "q2" | "q3" | "q4";
 
@@ -29,52 +30,38 @@ const quadrantOf = (
   return "q4";
 };
 
-const quadrantWeight = (imp: number | null, urg: number | null): number => {
-  switch (quadrantOf(imp, urg)) {
-    case "q1":
-      return W.Q1;
-    case "q2":
-      return W.Q2;
-    case "q3":
-      return W.Q3;
-    case "q4":
-      return W.Q4;
-  }
+const isFrogForDate = (t: dashRepo.DayTodoStat, date: string): boolean =>
+  t.is_frog === 1 && t.frog_date === date;
+
+const isScoredTodo = (t: dashRepo.DayTodoStat, date: string): boolean =>
+  t.is_important === 1 || t.is_urgent === 1 || isFrogForDate(t, date);
+
+const completedTodoScore = (
+  t: dashRepo.DayTodoStat,
+  date: string,
+  baseScore: number
+): number => {
+  if (t.status !== "done") return 0;
+  return (
+    baseScore +
+    (isFrogForDate(t, date) ? TODO_BONUS.FROG : 0) +
+    (t.is_important === 1 ? TODO_BONUS.IMPORTANT : 0)
+  );
 };
-
-const todoWeight = (t: dashRepo.DayTodoStat, date: string): number =>
-  quadrantWeight(t.is_important, t.is_urgent) +
-  (t.is_frog === 1 && t.frog_date === date ? W.FROG_BONUS : 0);
-
-const timestampOf = (value: string | null): number | null => {
-  if (!value) return null;
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : time;
-};
-
-const isCompletedLate = (t: dashRepo.DayTodoStat): boolean => {
-  const dueAt = timestampOf(t.due_at);
-  const completedAt = timestampOf(t.completed_at);
-  return dueAt !== null && completedAt !== null && completedAt > dueAt;
-};
-
-type HabitScoreInput = { total: number; completed: number };
 
 const computeScore = (
   todos: dashRepo.DayTodoStat[],
-  date: string,
-  habits: HabitScoreInput = { total: 0, completed: 0 }
+  date: string
 ): number => {
-  let total = 0;
-  let done = 0;
-  for (const t of todos) {
-    const w = todoWeight(t, date);
-    total += w;
-    if (t.status === "done") done += isCompletedLate(t) ? w / 2 : w;
-  }
-  total += habits.total * W.HABIT;
-  done += habits.completed * W.HABIT;
-  return total > 0 ? Math.round((done / total) * 100) : 0;
+  const scoredTodos = todos.filter((t) => isScoredTodo(t, date));
+  if (scoredTodos.length === 0) return 0;
+
+  const baseScore = SCORE_BASE / scoredTodos.length;
+  const score = scoredTodos.reduce(
+    (sum, t) => sum + completedTodoScore(t, date, baseScore),
+    0
+  );
+  return Math.round(score);
 };
 
 // ============================================================
@@ -106,7 +93,7 @@ export const getTodayStats = async (
     dashRepo.getFrogForDay(userId, date),
   ]);
 
-  const score = computeScore(todos, date, habits);
+  const score = computeScore(todos, date);
 
   const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
   for (const t of todos) {
@@ -266,10 +253,7 @@ export const getCalendarOverview = async (
 
   for (const d of Object.keys(days)) {
     if (d <= today) {
-      days[d].score = computeScore(todosByDay[d] ?? [], d, {
-        total: days[d].habits_total,
-        completed: days[d].habits_completed,
-      });
+      days[d].score = computeScore(todosByDay[d] ?? [], d);
     }
   }
 

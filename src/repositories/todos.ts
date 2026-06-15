@@ -21,6 +21,7 @@ export type TodoRow = {
   due_at: string | null;
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
+  habit_id: string | null;
   completed_at: string | null;
   // Recurrence fields (migration 0006)
   recurrence_type: "daily" | "weekly" | "custom" | null;
@@ -37,7 +38,7 @@ const TODO_COLUMNS =
   "id, user_id, parent_id, title, description, status, position, " +
   "is_frog, frog_date, is_important, is_urgent, " +
   "estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, " +
-  "trigger_after_todo_id, completed_at, " +
+  "trigger_after_todo_id, habit_id, completed_at, " +
   "recurrence_type, recurrence_interval, recurrence_days_of_week, " +
   "recurrence_end_date, recurrence_template_id, " +
   "created_at, updated_at, deleted_at";
@@ -63,6 +64,7 @@ const mapRow = (row: Record<string, unknown>): TodoRow => ({
   due_at: (row.due_at as string | null) ?? null,
   scheduled_date: (row.scheduled_date as string | null) ?? null,
   trigger_after_todo_id: (row.trigger_after_todo_id as string | null) ?? null,
+  habit_id: (row.habit_id as string | null) ?? null,
   completed_at: (row.completed_at as string | null) ?? null,
   recurrence_type: (row.recurrence_type as TodoRow["recurrence_type"]) ?? null,
   recurrence_interval: nullableNum(row.recurrence_interval),
@@ -90,6 +92,7 @@ export class TodoRepoError extends Error {
       | "not_found"
       | "invalid_parent"
       | "invalid_trigger"
+      | "invalid_habit"
       | "cycle"
       | "duplicate"
   ) {
@@ -154,6 +157,17 @@ const assertTriggerExistsForUser = async (
   if (res.rows.length === 0) throw new TodoRepoError("invalid_trigger");
 };
 
+const assertHabitExistsForUser = async (
+  habitId: string,
+  userId: string
+): Promise<void> => {
+  const res = await turso.execute({
+    sql: "SELECT id FROM habits WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    args: [habitId, userId],
+  });
+  if (res.rows.length === 0) throw new TodoRepoError("invalid_habit");
+};
+
 const detectCycle = async (
   candidateParentId: string,
   selfId: string,
@@ -192,6 +206,7 @@ export type CreateTodoInput = {
   start_at?: string | null;
   due_at?: string | null;
   trigger_after_todo_id?: string | null;
+  habit_id?: string | null;
   position?: number;
   // Recurrence (migration 0006)
   recurrence_type?: TodoRow["recurrence_type"];
@@ -212,6 +227,9 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
   }
   if (input.trigger_after_todo_id) {
     await assertTriggerExistsForUser(input.trigger_after_todo_id, input.user_id);
+  }
+  if (input.habit_id) {
+    await assertHabitExistsForUser(input.habit_id, input.user_id);
   }
 
   // Auto position = MAX+1 trong cùng scope (same parent hoặc same scheduled_date top-level)
@@ -248,11 +266,11 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
           (id, user_id, parent_id, title, description, status, position,
            is_frog, frog_date, is_important, is_urgent,
            estimated_minutes, start_at, due_at, scheduled_date,
-           trigger_after_todo_id,
+           trigger_after_todo_id, habit_id,
            recurrence_type, recurrence_interval, recurrence_days_of_week,
            recurrence_end_date, recurrence_template_id,
            created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id,
       input.user_id,
@@ -270,6 +288,7 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
       input.due_at ?? null,
       input.scheduled_date ?? null,
       input.trigger_after_todo_id ?? null,
+      input.habit_id ?? null,
       input.recurrence_type ?? null,
       recurrenceInterval,
       input.recurrence_days_of_week ?? null,
@@ -304,6 +323,7 @@ export type UpdateTodoPatch = Partial<{
   due_at: string | null;
   scheduled_date: string | null;
   trigger_after_todo_id: string | null;
+  habit_id: string | null;
   // Recurrence (migration 0006)
   recurrence_type: TodoRow["recurrence_type"];
   recurrence_interval: number | null;
@@ -330,6 +350,9 @@ export const updateTodo = async (
     if (patch.trigger_after_todo_id === id) throw new TodoRepoError("invalid_trigger");
     await assertTriggerExistsForUser(patch.trigger_after_todo_id, userId);
   }
+  if (patch.habit_id !== undefined && patch.habit_id !== null) {
+    await assertHabitExistsForUser(patch.habit_id, userId);
+  }
 
   const sets: string[] = [];
   const args: (string | number | null)[] = [];
@@ -354,6 +377,7 @@ export const updateTodo = async (
   if (patch.scheduled_date !== undefined) push("scheduled_date = ?", patch.scheduled_date);
   if (patch.trigger_after_todo_id !== undefined)
     push("trigger_after_todo_id = ?", patch.trigger_after_todo_id);
+  if (patch.habit_id !== undefined) push("habit_id = ?", patch.habit_id);
   if (patch.recurrence_type !== undefined)
     push("recurrence_type = ?", patch.recurrence_type);
   if (patch.recurrence_interval !== undefined)
@@ -458,11 +482,11 @@ export const createNextRecurringTodo = async (
               (id, user_id, parent_id, title, description, status, position,
                is_frog, frog_date, is_important, is_urgent,
                estimated_minutes, actual_minutes, start_at, due_at, scheduled_date,
-               trigger_after_todo_id, completed_at,
+               trigger_after_todo_id, habit_id, completed_at,
                recurrence_type, recurrence_interval, recurrence_days_of_week,
                recurrence_end_date, recurrence_template_id,
                created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           id,
           source.user_id,
@@ -479,6 +503,7 @@ export const createNextRecurringTodo = async (
           source.due_at,
           scheduledDate,
           source.trigger_after_todo_id,
+          source.habit_id,
           source.recurrence_type,
           source.recurrence_interval,
           source.recurrence_days_of_week,
@@ -632,6 +657,7 @@ export type ListOpts = {
   q?: string;
   tag?: string;
   tag_id?: string;
+  habit_id?: string;
 };
 
 export type TodoTagFields = {
@@ -697,6 +723,10 @@ export const listTodosByUser = async (
   } else if (opts.parent_id) {
     where.push("t.parent_id = ?");
     args.push(opts.parent_id);
+  }
+  if (opts.habit_id) {
+    where.push("t.habit_id = ?");
+    args.push(opts.habit_id);
   }
   if (opts.q) {
     where.push("(t.title LIKE ? OR t.description LIKE ?)");
@@ -791,6 +821,23 @@ export const listTriggeredTodos = async (
             AND status != 'done' AND deleted_at IS NULL
           ORDER BY position ASC, created_at ASC`,
     args: [triggerId, userId],
+  });
+  return (res.rows as unknown as Record<string, unknown>[]).map(mapRow);
+};
+
+export const listTodosByHabitDate = async (
+  userId: string,
+  habitId: string,
+  scheduledDate: string
+): Promise<TodoRow[]> => {
+  const res = await turso.execute({
+    sql: `SELECT ${TODO_COLUMNS} FROM todos
+          WHERE user_id = ?
+            AND habit_id = ?
+            AND scheduled_date = ?
+            AND deleted_at IS NULL
+          ORDER BY position ASC, created_at ASC`,
+    args: [userId, habitId, scheduledDate],
   });
   return (res.rows as unknown as Record<string, unknown>[]).map(mapRow);
 };

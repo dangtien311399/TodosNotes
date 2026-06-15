@@ -10,22 +10,34 @@ const dashboard = await import("../src/services/dashboard.js");
 const USER_ID = "user-dashboard-score";
 const NOW = "2026-01-01T00:00:00.000Z";
 
+type TodoInsertOptions = {
+  isFrog?: number;
+  frogDate?: string | null;
+  dueAt?: string | null;
+  completedAt?: string | null;
+};
+
 const insertTodo = async (
   id: string,
   date: string,
   status: "open" | "done",
-  isImportant: number,
+  isImportant: number | null,
   isUrgent: number,
-  dueAt: string | null = null,
-  completedAt: string | null = status === "done" ? NOW : null
+  options: TodoInsertOptions = {}
 ): Promise<void> => {
+  const completedAt =
+    options.completedAt !== undefined
+      ? options.completedAt
+      : status === "done"
+        ? NOW
+        : null;
   await turso.execute({
     sql: `INSERT INTO todos
           (id, user_id, parent_id, title, status, scheduled_date,
            is_important, is_urgent, is_frog, frog_date, position,
            due_at, completed_at,
            created_at, updated_at, deleted_at)
-          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 0, NULL, 0, ?, ?, ?, ?, NULL)`,
+          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NULL)`,
     args: [
       id,
       USER_ID,
@@ -34,7 +46,9 @@ const insertTodo = async (
       date,
       isImportant,
       isUrgent,
-      dueAt,
+      options.isFrog ?? 0,
+      options.frogDate ?? null,
+      options.dueAt ?? null,
       completedAt,
       NOW,
       NOW,
@@ -115,52 +129,75 @@ beforeEach(async () => {
   await turso.execute("DELETE FROM todos");
 });
 
-test("today score includes habits at half a todo point each", async () => {
+test("todo score uses flat base and can exceed 100 with bonuses", async () => {
   const date = "2026-01-10";
-  await insertTodo("todo-open-q4", date, "open", 0, 0);
-  await insertHabit("habit-done", "2026-01-01");
-  await insertHabit("habit-open", "2026-01-01");
-  await insertHabitLog("habit-done", date, 1);
+  await insertTodo("todo-frog-important", date, "done", 1, 0, {
+    isFrog: 1,
+    frogDate: date,
+  });
+  await insertTodo("todo-urgent-a", date, "open", 0, 1);
+  await insertTodo("todo-urgent-b", date, "open", 0, 1);
+  await insertTodo("todo-urgent-c", date, "open", 0, 1);
 
-  const stats = await dashboard.getTodayStats(USER_ID, { date });
+  let stats = await dashboard.getTodayStats(USER_ID, { date });
 
-  assert.equal(stats.todos.total, 1);
-  assert.deepEqual(stats.habits_today, { total: 2, completed: 1 });
-  assert.equal(stats.score, 25);
-});
-
-test("completed overdue todos only receive half of their normal points", async () => {
-  const date = "2026-01-10";
-  await insertTodo(
-    "todo-late-q4",
-    date,
-    "done",
-    0,
-    0,
-    "2026-01-10T08:00:00.000Z",
-    "2026-01-10T09:00:00.000Z"
-  );
-
-  const stats = await dashboard.getTodayStats(USER_ID, { date });
-
-  assert.equal(stats.todos.total, 1);
+  assert.equal(stats.todos.total, 4);
   assert.equal(stats.todos.done, 1);
-  assert.equal(stats.score, 50);
+  assert.equal(stats.score, 40);
+
+  await turso.execute({
+    sql: `UPDATE todos
+          SET status = 'done', completed_at = ?
+          WHERE id IN (?, ?, ?)`,
+    args: [NOW, "todo-urgent-a", "todo-urgent-b", "todo-urgent-c"],
+  });
+
+  stats = await dashboard.getTodayStats(USER_ID, { date });
+
+  assert.equal(stats.todos.done, 4);
+  assert.equal(stats.score, 115);
 });
 
-test("calendar score is populated for habit-only past days", async () => {
-  const date = "2026-01-11";
+test("urgent-only todos have no bonus and unmarked todos are ignored", async () => {
+  const date = "2026-01-10";
+  await insertTodo("todo-important", date, "done", 1, 0);
+  await insertTodo("todo-urgent", date, "done", 0, 1);
+  await insertTodo("todo-unmarked", date, "done", 0, 0);
+
+  const stats = await dashboard.getTodayStats(USER_ID, { date });
+
+  assert.equal(stats.todos.total, 3);
+  assert.equal(stats.todos.done, 3);
+  assert.equal(stats.score, 105);
+});
+
+test("habits are reported but do not add todo score", async () => {
+  const date = "2026-01-10";
   await insertHabit("habit-done", "2026-01-01");
   await insertHabit("habit-open", "2026-01-01");
   await insertHabitLog("habit-done", date, 1);
+
+  const stats = await dashboard.getTodayStats(USER_ID, { date });
+
+  assert.equal(stats.todos.total, 0);
+  assert.deepEqual(stats.habits_today, { total: 2, completed: 1 });
+  assert.equal(stats.score, 0);
+});
+
+test("calendar score uses the same todo bonus model", async () => {
+  const date = "2026-01-11";
+  await insertTodo("todo-frog", date, "done", 0, 0, {
+    isFrog: 1,
+    frogDate: date,
+  });
+  await insertTodo("todo-urgent", date, "open", 0, 1);
 
   const overview = await dashboard.getCalendarOverview(USER_ID, {
     from: date,
     to: date,
   });
 
-  assert.equal(overview.days[date].total_todos, 0);
-  assert.equal(overview.days[date].habits_total, 2);
-  assert.equal(overview.days[date].habits_completed, 1);
-  assert.equal(overview.days[date].score, 50);
+  assert.equal(overview.days[date].total_todos, 2);
+  assert.equal(overview.days[date].done_todos, 1);
+  assert.equal(overview.days[date].score, 60);
 });

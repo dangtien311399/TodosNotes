@@ -265,6 +265,26 @@ export const upsertLog = async (
   return row;
 };
 
+export const upsertAutoLog = async (
+  habitId: string,
+  logDate: string,
+  completed: boolean
+): Promise<HabitLogRow> => {
+  const now = nowISO();
+  await turso.execute({
+    sql: `INSERT INTO habit_logs (id, habit_id, log_date, completed, note, created_at, updated_at, deleted_at)
+          VALUES (?, ?, ?, ?, NULL, ?, ?, NULL)
+          ON CONFLICT(habit_id, log_date) DO UPDATE SET
+            completed = excluded.completed,
+            updated_at = excluded.updated_at,
+            deleted_at = NULL`,
+    args: [newId(), habitId, logDate, completed ? 1 : 0, now, now],
+  });
+  const row = await getLog(habitId, logDate);
+  if (!row) throw new Error("upsertAutoLog: row missing");
+  return row;
+};
+
 export const getLog = async (
   habitId: string,
   logDate: string
