@@ -8,6 +8,8 @@ import adminAuth from "./plugins/admin-auth.js";
 import userAuth from "./plugins/user-auth.js";
 import adminRoutes from "./routes/admin/index.js";
 import apiRoutes from "./routes/api/v1/index.js";
+import notificationRoutes from "./routes/api/notifications.js";
+import { startNotificationScheduler } from "./services/notification-scheduler.js";
 
 const app: FastifyInstance = Fastify({
   logger: {
@@ -74,6 +76,11 @@ await app.register(adminRoutes, { prefix: "/admin" });
 
 // Mobile REST API
 await app.register(apiRoutes, { prefix: "/api/v1" });
+
+// Notification API alias requested by mobile integrations.
+await app.register(notificationRoutes, { prefix: "/api/notifications" });
+
+startNotificationScheduler(app.log);
 
 // Start
 try {

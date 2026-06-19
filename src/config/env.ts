@@ -1,6 +1,14 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const boolFromEnv = z
+  .string()
+  .optional()
+  .transform((value) => {
+    if (value === undefined || value.trim() === "") return false;
+    return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  });
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -16,6 +24,9 @@ const EnvSchema = z.object({
   ADMIN_PASSWORD_HASH: z
     .string()
     .regex(/^\$2[aby]\$\d{2}\$.{53}$/, "ADMIN_PASSWORD_HASH must be a bcrypt hash (run `npm run admin:hash <password>`)"),
+
+  NOTIFICATIONS_ENABLED: boolFromEnv,
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().trim().min(1).optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
