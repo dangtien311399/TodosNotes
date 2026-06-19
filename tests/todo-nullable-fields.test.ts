@@ -7,6 +7,7 @@ process.env.TURSO_AUTH_TOKEN = "";
 const { UpdateTodoSchema } = await import("../src/schemas/api/todos.js");
 const { turso } = await import("../src/config/db.js");
 const todosRepo = await import("../src/repositories/todos.js");
+const todosService = await import("../src/services/todos.js");
 const { processPush } = await import("../src/services/sync.service.js");
 
 const USER_ID = "user-nullable-fields";
@@ -30,6 +31,7 @@ const TODO_COLUMNS = [
   "start_at",
   "due_at",
   "scheduled_date",
+  "time",
   "trigger_after_todo_id",
   "habit_id",
   "completed_at",
@@ -67,6 +69,7 @@ const insertTodo = async (
     start_at: null,
     due_at: null,
     scheduled_date: "2026-01-02",
+    time: null,
     trigger_after_todo_id: null,
     habit_id: null,
     completed_at: null,
@@ -136,6 +139,7 @@ before(async () => {
       start_at TEXT,
       due_at TEXT,
       scheduled_date TEXT,
+      time TEXT,
       trigger_after_todo_id TEXT,
       habit_id TEXT,
       completed_at TEXT,
@@ -190,6 +194,75 @@ test("PATCH todo can clear estimated_minutes with null", async () => {
   assert.equal(updated?.estimated_minutes, null);
   const row = await getTodo("todo-patch-estimated");
   assert.equal(row.estimated_minutes, null);
+});
+
+test("PATCH todo can set and clear time", async () => {
+  assert.equal(UpdateTodoSchema.safeParse({ time: "08:30" }).success, true);
+  assert.equal(UpdateTodoSchema.safeParse({ time: null }).success, true);
+  assert.equal(UpdateTodoSchema.safeParse({ time: "8:30" }).success, false);
+  assert.equal(UpdateTodoSchema.safeParse({ time: "24:00" }).success, false);
+
+  await insertTodo("todo-patch-time");
+  const timed = await todosRepo.updateTodo(
+    "todo-patch-time",
+    USER_ID,
+    { time: "08:30" }
+  );
+  assert.equal(timed?.time, "08:30");
+
+  const cleared = await todosRepo.updateTodo(
+    "todo-patch-time",
+    USER_ID,
+    { time: null }
+  );
+  assert.equal(cleared?.time, null);
+});
+
+test("todo time requires top-level todo with scheduled_date", async () => {
+  await assert.rejects(
+    () => todosRepo.createTodo({
+      user_id: USER_ID,
+      title: "Missing date",
+      scheduled_date: null,
+      time: "08:30",
+    }),
+    { code: "bad_input" }
+  );
+
+  await assert.rejects(
+    () => todosRepo.createTodo({
+      user_id: USER_ID,
+      title: "Subtask time",
+      parent_id: "parent-id",
+      scheduled_date: "2026-01-02",
+      time: "08:30",
+    }),
+    { code: "bad_input" }
+  );
+
+  await insertTodo("todo-time-state", { time: "08:30" });
+  await assert.rejects(
+    () => todosRepo.updateTodo("todo-time-state", USER_ID, { scheduled_date: null }),
+    { code: "bad_input" }
+  );
+
+  const cleared = await todosRepo.updateTodo("todo-time-state", USER_ID, {
+    scheduled_date: null,
+    time: null,
+  });
+  assert.equal(cleared?.scheduled_date, null);
+  assert.equal(cleared?.time, null);
+});
+
+test("move-to-day clears time when date is removed", async () => {
+  await insertTodo("todo-move-time", { time: "08:30" });
+
+  const moved = await todosService.moveToDay(USER_ID, "todo-move-time", {
+    date: null,
+  });
+
+  assert.equal(moved.scheduled_date, null);
+  assert.equal(moved.time, null);
 });
 
 test("PATCH todo can clear recurrence fields with null", async () => {
@@ -263,4 +336,26 @@ test("sync push todo update can clear recurrence_interval with null", async () =
   const row = await getTodo("todo-sync-recurrence");
   assert.equal(Number(row.estimated_minutes), 50);
   assert.equal(row.recurrence_interval, null);
+});
+
+test("sync push todo update can clear time with null", async () => {
+  await insertTodo("todo-sync-time", {
+    time: "08:30",
+  });
+
+  const results = await processPush(USER_ID, [
+    {
+      op: "update",
+      type: "todo",
+      payload: {
+        id: "todo-sync-time",
+        updated_at: NEW_UPDATED_AT,
+        time: null,
+      },
+    },
+  ]);
+
+  assert.equal(results[0]?.status, "applied");
+  const row = await getTodo("todo-sync-time");
+  assert.equal(row.time, null);
 });

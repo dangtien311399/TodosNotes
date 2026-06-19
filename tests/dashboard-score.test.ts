@@ -90,6 +90,7 @@ before(async () => {
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       scheduled_date TEXT,
+      time TEXT,
       is_important INTEGER,
       is_urgent INTEGER,
       is_frog INTEGER NOT NULL DEFAULT 0,

@@ -47,6 +47,7 @@ const insertTodo = async (
     start_at: null,
     due_at: null,
     scheduled_date: "2026-01-10",
+    time: null,
     trigger_after_todo_id: null,
     habit_id: null,
     completed_at: null,
@@ -121,6 +122,7 @@ before(async () => {
       start_at TEXT,
       due_at TEXT,
       scheduled_date TEXT,
+      time TEXT,
       trigger_after_todo_id TEXT,
       habit_id TEXT,
       completed_at TEXT,
@@ -449,6 +451,86 @@ test("sync push tag_ids attaches and clears todo tags", async () => {
   ]);
   assert.equal(cleared[0].status, "applied");
   assert.deepEqual(await todoTagIds(todoId), []);
+});
+
+test("sync push and changes preserve todo time", async () => {
+  const todoId = newId();
+  await insertTodo(todoId);
+
+  const pushed = await processPush(USER_ID, [
+    {
+      op: "update",
+      type: "todo",
+      payload: {
+        id: todoId,
+        updated_at: NEW,
+        time: "08:30",
+      },
+    },
+  ]);
+  assert.equal(pushed[0].status, "applied");
+
+  const changes = await getChangesSince(USER_ID, OLD);
+  const changedTodo = changes.todos.find((todo) => todo.id === todoId);
+  assert.ok(changedTodo);
+  assert.equal(changedTodo.time, "08:30");
+});
+
+test("sync push rejects invalid todo time", async () => {
+  const todoId = newId();
+  await insertTodo(todoId);
+
+  const invalidFormat = await processPush(USER_ID, [
+    {
+      op: "update",
+      type: "todo",
+      payload: {
+        id: todoId,
+        updated_at: NEW,
+        time: "8:30",
+      },
+    },
+  ]);
+  assert.equal(invalidFormat[0].status, "error");
+  assert.equal(invalidFormat[0].error, "bad_input");
+
+  const missingDate = await processPush(USER_ID, [
+    {
+      op: "create",
+      type: "todo",
+      payload: {
+        id: newId(),
+        title: "No date",
+        status: "open",
+        position: 0,
+        time: "08:30",
+        created_at: NEW,
+        updated_at: NEW,
+      },
+    },
+  ]);
+  assert.equal(missingDate[0].status, "error");
+  assert.equal(missingDate[0].error, "bad_input");
+
+  const subtaskTime = await processPush(USER_ID, [
+    {
+      op: "create",
+      type: "todo",
+      payload: {
+        id: newId(),
+        parent_id: todoId,
+        title: "Subtask",
+        status: "open",
+        position: 0,
+        scheduled_date: "2026-01-10",
+        time: "08:30",
+        created_at: NEW,
+        updated_at: NEW,
+      },
+    },
+  ]);
+  assert.equal(subtaskTime[0].status, "error");
+  assert.equal(subtaskTime[0].error, "bad_input");
 });
 
 test("REST-style replace bumps todo so sync changes include new tag_ids", async () => {

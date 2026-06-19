@@ -57,6 +57,7 @@ export type SyncTodo = {
   start_at: string | null;
   due_at: string | null;
   scheduled_date: string | null;
+  time: string | null;
   trigger_after_todo_id: string | null;
   habit_id: string | null;
   completed_at: string | null;

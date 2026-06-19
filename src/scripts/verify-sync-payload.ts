@@ -30,7 +30,7 @@ const NOT_NULL: Record<string, string[]> = {
 
 // ── REQUIRED KEYS per entity type (must be present even if null) ─────────────
 const REQUIRED_KEYS: Record<string, string[]> = {
-  todos: ["id", "habit_id", "tag_ids", "linked_note_ids"],
+  todos: ["id", "habit_id", "time", "tag_ids", "linked_note_ids"],
   habit_logs: ["id", "habit_id", "log_date", "completed", "note", "created_at", "updated_at", "deleted_at"],
   checklist_template_orders: ["id", "user_id", "template_id", "sort_order", "created_at", "updated_at", "deleted_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "description", "is_required", "created_at", "updated_at", "deleted_at"],
@@ -59,9 +59,9 @@ async function createTestData(userId: string): Promise<void> {
   }
   await turso.execute({
     sql: `INSERT INTO todos
-          (id, user_id, title, status, position, is_frog, scheduled_date,
+          (id, user_id, title, status, position, is_frog, scheduled_date, time,
            habit_id, created_at, updated_at)
-          VALUES (?,?,?,'open',0,0,'2026-05-20',?,?,?)`,
+          VALUES (?,?,?,'open',0,0,'2026-05-20','08:30',?,?,?)`,
     args: [newId(), userId, "Verify linked habit todo", habitId, now, now],
   });
 

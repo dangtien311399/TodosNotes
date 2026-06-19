@@ -59,6 +59,7 @@ const insertTodo = async (
     start_at: null,
     due_at: null,
     scheduled_date: "2099-01-01",
+    time: null,
     trigger_after_todo_id: null,
     habit_id: null,
     completed_at: null,
@@ -175,6 +176,7 @@ before(async () => {
       start_at TEXT,
       due_at TEXT,
       scheduled_date TEXT,
+      time TEXT,
       trigger_after_todo_id TEXT,
       habit_id TEXT,
       completed_at TEXT,
@@ -437,6 +439,7 @@ test("next recurring todo copies habit_id", async () => {
 
   assert.equal(result.next_recurring_todo?.habit_id, "habit-recurring");
   assert.equal(result.next_recurring_todo?.scheduled_date, "2099-01-03");
+  assert.equal(result.next_recurring_todo?.time, null);
 });
 
 test("sync changes and push support habit_id and auto habit logging", async () => {

@@ -20,6 +20,7 @@ export type TodoRow = {
   start_at: string | null;
   due_at: string | null;
   scheduled_date: string | null;
+  time: string | null;
   trigger_after_todo_id: string | null;
   habit_id: string | null;
   completed_at: string | null;
@@ -37,7 +38,7 @@ export type TodoRow = {
 const TODO_COLUMNS =
   "id, user_id, parent_id, title, description, status, position, " +
   "is_frog, frog_date, is_important, is_urgent, " +
-  "estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, " +
+  "estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, time, " +
   "trigger_after_todo_id, habit_id, completed_at, " +
   "recurrence_type, recurrence_interval, recurrence_days_of_week, " +
   "recurrence_end_date, recurrence_template_id, " +
@@ -63,6 +64,7 @@ const mapRow = (row: Record<string, unknown>): TodoRow => ({
   start_at: (row.start_at as string | null) ?? null,
   due_at: (row.due_at as string | null) ?? null,
   scheduled_date: (row.scheduled_date as string | null) ?? null,
+  time: (row.time as string | null) ?? null,
   trigger_after_todo_id: (row.trigger_after_todo_id as string | null) ?? null,
   habit_id: (row.habit_id as string | null) ?? null,
   completed_at: (row.completed_at as string | null) ?? null,
@@ -93,6 +95,7 @@ export class TodoRepoError extends Error {
       | "invalid_parent"
       | "invalid_trigger"
       | "invalid_habit"
+      | "bad_input"
       | "cycle"
       | "duplicate"
   ) {
@@ -103,6 +106,19 @@ export class TodoRepoError extends Error {
 const isUniqueViolation = (e: unknown): boolean => {
   const msg = e instanceof Error ? e.message : String(e);
   return /UNIQUE/i.test(msg);
+};
+
+const TODO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const assertValidTimeState = (state: {
+  parent_id: string | null;
+  scheduled_date: string | null;
+  time: string | null;
+}): void => {
+  if (state.time === null) return;
+  if (!TODO_TIME_RE.test(state.time)) throw new TodoRepoError("bad_input");
+  if (state.parent_id !== null) throw new TodoRepoError("bad_input");
+  if (state.scheduled_date === null) throw new TodoRepoError("bad_input");
 };
 
 // ============================================================
@@ -197,6 +213,7 @@ export type CreateTodoInput = {
   description?: string | null;
   parent_id?: string | null;
   scheduled_date?: string | null;
+  time?: string | null;
   status?: TodoRow["status"];
   is_frog?: boolean;
   frog_date?: string | null;
@@ -222,6 +239,12 @@ const boolToInt = (v: boolean | null | undefined): number | null => {
 };
 
 export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
+  assertValidTimeState({
+    parent_id: input.parent_id ?? null,
+    scheduled_date: input.scheduled_date ?? null,
+    time: input.time ?? null,
+  });
+
   if (input.parent_id) {
     await assertParentExistsForUser(input.parent_id, input.user_id);
   }
@@ -265,12 +288,12 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
     sql: `INSERT INTO todos
           (id, user_id, parent_id, title, description, status, position,
            is_frog, frog_date, is_important, is_urgent,
-           estimated_minutes, start_at, due_at, scheduled_date,
+           estimated_minutes, start_at, due_at, scheduled_date, time,
            trigger_after_todo_id, habit_id,
            recurrence_type, recurrence_interval, recurrence_days_of_week,
            recurrence_end_date, recurrence_template_id,
            created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id,
       input.user_id,
@@ -287,6 +310,7 @@ export const createTodo = async (input: CreateTodoInput): Promise<TodoRow> => {
       input.start_at ?? null,
       input.due_at ?? null,
       input.scheduled_date ?? null,
+      input.time ?? null,
       input.trigger_after_todo_id ?? null,
       input.habit_id ?? null,
       input.recurrence_type ?? null,
@@ -322,6 +346,7 @@ export type UpdateTodoPatch = Partial<{
   start_at: string | null;
   due_at: string | null;
   scheduled_date: string | null;
+  time: string | null;
   trigger_after_todo_id: string | null;
   habit_id: string | null;
   // Recurrence (migration 0006)
@@ -354,6 +379,15 @@ export const updateTodo = async (
     await assertHabitExistsForUser(patch.habit_id, userId);
   }
 
+  assertValidTimeState({
+    parent_id: patch.parent_id !== undefined ? patch.parent_id : current.parent_id,
+    scheduled_date:
+      patch.scheduled_date !== undefined
+        ? patch.scheduled_date
+        : current.scheduled_date,
+    time: patch.time !== undefined ? patch.time : current.time,
+  });
+
   const sets: string[] = [];
   const args: (string | number | null)[] = [];
   const push = (sql: string, val: string | number | null) => {
@@ -375,6 +409,7 @@ export const updateTodo = async (
   if (patch.start_at !== undefined) push("start_at = ?", patch.start_at);
   if (patch.due_at !== undefined) push("due_at = ?", patch.due_at);
   if (patch.scheduled_date !== undefined) push("scheduled_date = ?", patch.scheduled_date);
+  if (patch.time !== undefined) push("time = ?", patch.time);
   if (patch.trigger_after_todo_id !== undefined)
     push("trigger_after_todo_id = ?", patch.trigger_after_todo_id);
   if (patch.habit_id !== undefined) push("habit_id = ?", patch.habit_id);
@@ -481,12 +516,12 @@ export const createNextRecurringTodo = async (
         sql: `INSERT INTO todos
               (id, user_id, parent_id, title, description, status, position,
                is_frog, frog_date, is_important, is_urgent,
-               estimated_minutes, actual_minutes, start_at, due_at, scheduled_date,
+               estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, time,
                trigger_after_todo_id, habit_id, completed_at,
                recurrence_type, recurrence_interval, recurrence_days_of_week,
                recurrence_end_date, recurrence_template_id,
                created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           id,
           source.user_id,
@@ -502,6 +537,7 @@ export const createNextRecurringTodo = async (
           source.start_at,
           source.due_at,
           scheduledDate,
+          source.time,
           source.trigger_after_todo_id,
           source.habit_id,
           source.recurrence_type,

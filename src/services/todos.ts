@@ -21,6 +21,7 @@ export class ServiceError extends Error {
       | "invalid_parent"
       | "invalid_trigger"
       | "invalid_habit"
+      | "bad_input"
       | "cycle"
       | "duplicate"
   ) {
@@ -155,6 +156,7 @@ export const createTodo = async (
       estimated_minutes: input.estimated_minutes ?? null,
       start_at: input.start_at ?? null,
       due_at: input.due_at ?? null,
+      time: input.time ?? null,
       trigger_after_todo_id: input.trigger_after_todo_id ?? null,
       habit_id: input.habit_id ?? null,
       position: input.position,
@@ -322,6 +324,7 @@ export const moveToDay = async (
   try {
     const row = await todosRepo.updateTodo(id, userId, {
       scheduled_date: body.date,
+      ...(body.date === null ? { time: null } : {}),
     });
     if (!row) throw new ServiceError("not_found");
     return row;

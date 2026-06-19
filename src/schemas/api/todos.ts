@@ -2,6 +2,9 @@ import { z } from "zod";
 
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 const IsoDT = z.iso.datetime();
+const TodoTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:mm");
 const Minutes = z.number().int().min(0).max(10_000);
 const RecurrenceInterval = z.number().int().min(1).max(365);
 
@@ -16,6 +19,7 @@ export const CreateTodoSchema = z.object({
   description: z.string().max(10_000).optional(),
   parent_id: z.uuid().optional(),
   scheduled_date: IsoDate.nullable().optional(),
+  time: TodoTime.nullable().optional(),
   status: z.enum(["open", "in_progress", "done", "archived"]).optional(),
   is_frog: z.boolean().optional(),
   frog_date: IsoDate.nullable().optional(),

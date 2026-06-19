@@ -123,6 +123,7 @@ export type EisenhowerTodo = {
   title: string;
   status: string;
   scheduled_date: string | null;
+  time: string | null;
   is_important: boolean;
   is_urgent: boolean;
   is_frog: boolean;
@@ -149,6 +150,7 @@ const toEisenhowerTodo = (
     title: t.title,
     status: t.status,
     scheduled_date: t.scheduled_date,
+    time: t.time,
     is_important: t.is_important === 1,
     is_urgent: t.is_urgent === 1,
     is_frog: t.is_frog === 1,

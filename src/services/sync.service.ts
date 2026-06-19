@@ -34,6 +34,8 @@ import {
 const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
 
+const TODO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 // ── Result type ───────────────────────────────────────────────────────────────
 
 export type OpResult = {
@@ -83,6 +85,17 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
         !Number.isInteger(durationMs) ||
         durationMs < 0)
     ) {
+      return { id, status: "error", error: "bad_input" };
+    }
+  }
+
+  if (
+    type === "todo" &&
+    opType !== "delete" &&
+    hasOwn(payload, "time") &&
+    payload.time !== null
+  ) {
+    if (typeof payload.time !== "string" || !TODO_TIME_RE.test(payload.time)) {
       return { id, status: "error", error: "bad_input" };
     }
   }
@@ -207,6 +220,22 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
     type === "todo" && opType !== "delete"
       ? await todosRepo.getTodoByIdScoped(id, userId)
       : null;
+
+  if (type === "todo" && opType !== "delete") {
+    const finalParentId = hasOwn(dbPayload, "parent_id")
+      ? (dbPayload.parent_id as string | null) ?? null
+      : beforeTodo?.parent_id ?? null;
+    const finalScheduledDate = hasOwn(dbPayload, "scheduled_date")
+      ? (dbPayload.scheduled_date as string | null) ?? null
+      : beforeTodo?.scheduled_date ?? null;
+    const finalTime = hasOwn(dbPayload, "time")
+      ? (dbPayload.time as string | null) ?? null
+      : beforeTodo?.time ?? null;
+
+    if (finalTime !== null && (finalParentId !== null || finalScheduledDate === null)) {
+      return { id, status: "error", error: "bad_input" };
+    }
+  }
 
   if (opType === "delete") {
     const delAt = (payload.deleted_at as string | undefined) ?? nowISO();

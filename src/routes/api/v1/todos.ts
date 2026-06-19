@@ -23,6 +23,7 @@ const mapErr = (e: unknown, reply: FastifyReply): FastifyReply => {
       return reply.code(400).send({ error: "invalid_trigger" });
     if (e.code === "invalid_habit")
       return reply.code(400).send({ error: "invalid_habit" });
+    if (e.code === "bad_input") return reply.code(400).send({ error: "bad_input" });
   }
   if (e instanceof Error && e.message === "bad_cursor") {
     return reply.code(400).send({ error: "bad_cursor" });
