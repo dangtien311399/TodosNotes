@@ -6,6 +6,7 @@ process.env.TURSO_AUTH_TOKEN = "";
 
 const { turso } = await import("../src/config/db.js");
 const todosService = await import("../src/services/todos.js");
+const syncService = await import("../src/services/sync.service.js");
 
 const USER_ID = "user-recurring-complete";
 const OLD = "2026-06-01T00:00:00.000Z";
@@ -116,12 +117,34 @@ const countTodos = async (): Promise<number> => {
   return Number((res.rows[0] as unknown as { count: number }).count);
 };
 
+const liveTodoIds = async (userId = USER_ID): Promise<string[]> => {
+  const res = await turso.execute({
+    sql: `SELECT id FROM todos
+          WHERE user_id = ? AND deleted_at IS NULL
+          ORDER BY scheduled_date ASC, id ASC`,
+    args: [userId],
+  });
+  return (res.rows as unknown as { id: string }[]).map((row) => row.id);
+};
+
 const todoTagIds = async (todoId: string): Promise<string[]> => {
   const res = await turso.execute({
     sql: "SELECT tag_id FROM todo_tags WHERE todo_id = ? ORDER BY tag_id ASC",
     args: [todoId],
   });
   return (res.rows as unknown as { tag_id: string }[]).map((row) => row.tag_id);
+};
+
+const liveChildren = async (
+  parentId: string
+): Promise<Record<string, unknown>[]> => {
+  const res = await turso.execute({
+    sql: `SELECT * FROM todos
+          WHERE parent_id = ? AND deleted_at IS NULL
+          ORDER BY position ASC, id ASC`,
+    args: [parentId],
+  });
+  return res.rows as unknown as Record<string, unknown>[];
 };
 
 before(async () => {
@@ -218,6 +241,98 @@ test("completing a daily recurring todo creates exactly one next occurrence", as
   assert.equal(await countTodos(), 2);
 });
 
+test("next recurring todo clones the complete subtask tree with tags and fresh state", async () => {
+  await insertTodo("todo-parent");
+  await insertTodo("todo-child-a", {
+    parent_id: "todo-parent",
+    title: "Prepare materials",
+    status: "done",
+    position: 0,
+    actual_minutes: 20,
+    scheduled_date: null,
+    time: null,
+    completed_at: "2026-06-15T07:30:00.000Z",
+    recurrence_type: null,
+    recurrence_interval: null,
+    recurrence_end_date: null,
+  });
+  await insertTodo("todo-child-b", {
+    parent_id: "todo-parent",
+    title: "Execute task",
+    position: 1,
+    scheduled_date: null,
+    time: null,
+    trigger_after_todo_id: "todo-child-a",
+    recurrence_type: null,
+    recurrence_interval: null,
+    recurrence_end_date: null,
+  });
+  await insertTodo("todo-grandchild", {
+    parent_id: "todo-child-b",
+    title: "Review output",
+    position: 0,
+    scheduled_date: null,
+    time: null,
+    recurrence_type: null,
+    recurrence_interval: null,
+    recurrence_end_date: null,
+  });
+  await insertTag("tag-child");
+  await attachTag("todo-child-a", "tag-child");
+
+  const result = await todosService.completeTodo(USER_ID, "todo-parent", {});
+  const next = result.next_recurring_todo;
+  assert.ok(next);
+
+  const clonedChildren = await liveChildren(next.id);
+  assert.equal(clonedChildren.length, 2);
+  const clonedA = clonedChildren.find(
+    (row) => row.title === "Prepare materials"
+  );
+  const clonedB = clonedChildren.find((row) => row.title === "Execute task");
+  assert.ok(clonedA);
+  assert.ok(clonedB);
+  assert.notEqual(clonedA.id, "todo-child-a");
+  assert.notEqual(clonedB.id, "todo-child-b");
+  assert.equal(clonedA.status, "open");
+  assert.equal(clonedA.actual_minutes, null);
+  assert.equal(clonedA.completed_at, null);
+  assert.equal(clonedA.scheduled_date, null);
+  assert.equal(clonedA.time, null);
+  assert.equal(clonedB.trigger_after_todo_id, clonedA.id);
+  assert.deepEqual(await todoTagIds(String(clonedA.id)), ["tag-child"]);
+
+  const clonedGrandchildren = await liveChildren(String(clonedB.id));
+  assert.equal(clonedGrandchildren.length, 1);
+  assert.equal(clonedGrandchildren[0].title, "Review output");
+  assert.notEqual(clonedGrandchildren[0].id, "todo-grandchild");
+});
+
+test("existing next occurrence receives missing subtasks without duplicating them", async () => {
+  await insertTodo("todo-template");
+  await insertTodo("todo-child", {
+    parent_id: "todo-template",
+    title: "Child task",
+    scheduled_date: null,
+    time: null,
+    recurrence_type: null,
+    recurrence_interval: null,
+    recurrence_end_date: null,
+  });
+  await insertTodo("todo-existing-next", {
+    scheduled_date: "2026-06-17",
+    recurrence_template_id: "todo-template",
+  });
+
+  const result = await todosService.completeTodo(USER_ID, "todo-template", {});
+
+  assert.equal(result.next_recurring_todo?.id, "todo-existing-next");
+  assert.equal((await liveChildren("todo-existing-next")).length, 1);
+
+  await todosService.deleteTodo(USER_ID, "todo-template", "this");
+  assert.equal((await liveChildren("todo-existing-next")).length, 1);
+});
+
 test("weekly recurrence uses the next configured weekday", async () => {
   await insertTodo("todo-weekly", {
     recurrence_type: "weekly",
@@ -258,4 +373,163 @@ test("existing next occurrence is reused instead of duplicated", async () => {
 
   const original = await getTodo("todo-template");
   assert.equal(original.status, "done");
+});
+
+test("delete scope this removes only the selected occurrence and keeps it as an exception", async () => {
+  await insertTodo("todo-template");
+  await insertTodo("todo-selected", {
+    scheduled_date: "2026-06-17",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-selected-subtask", {
+    parent_id: "todo-selected",
+    scheduled_date: null,
+    recurrence_type: null,
+    recurrence_interval: null,
+    recurrence_end_date: null,
+    recurrence_template_id: null,
+  });
+  await insertTodo("todo-future", {
+    scheduled_date: "2026-06-19",
+    recurrence_template_id: "todo-template",
+  });
+
+  await todosService.deleteTodo(USER_ID, "todo-selected", "this");
+
+  const futureChildren = await liveChildren("todo-future");
+  assert.equal(futureChildren.length, 1);
+  assert.equal(futureChildren[0].title, "Recurring todo");
+  assert.ok((await getTodo("todo-selected")).deleted_at);
+  assert.ok((await getTodo("todo-selected-subtask")).deleted_at);
+
+  const completed = await todosService.completeTodo(
+    USER_ID,
+    "todo-template",
+    {}
+  );
+  assert.equal(completed.next_recurring_todo?.id, "todo-future");
+  assert.ok((await getTodo("todo-selected")).deleted_at);
+  assert.equal(await countTodos(), 5);
+});
+
+test("delete scope this keeps the recurrence alive when no later occurrence exists", async () => {
+  await insertTodo("todo-template");
+
+  await todosService.deleteTodo(USER_ID, "todo-template", "this");
+
+  const allRows = await turso.execute({
+    sql: `SELECT id, scheduled_date, recurrence_template_id, deleted_at
+          FROM todos ORDER BY scheduled_date ASC`,
+    args: [],
+  });
+  assert.equal(allRows.rows.length, 2);
+  const rows = allRows.rows as unknown as {
+    scheduled_date: string;
+    recurrence_template_id: string | null;
+    deleted_at: string | null;
+  }[];
+  assert.ok(rows[0].deleted_at);
+  const next = rows[1] as {
+    scheduled_date: string;
+    recurrence_template_id: string;
+    deleted_at: string | null;
+  };
+  assert.equal(next.scheduled_date, "2026-06-17");
+  assert.equal(next.recurrence_template_id, "todo-template");
+  assert.equal(next.deleted_at, null);
+});
+
+test("delete scope future removes the selected date and every later occurrence including done todos", async () => {
+  await insertTodo("todo-template", {
+    recurrence_end_date: "2026-12-31",
+  });
+  await insertTodo("todo-selected-done", {
+    status: "done",
+    completed_at: "2026-06-17T08:00:00.000Z",
+    scheduled_date: "2026-06-17",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-future", {
+    scheduled_date: "2026-06-19",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-past", {
+    status: "done",
+    completed_at: "2026-06-13T08:00:00.000Z",
+    scheduled_date: "2026-06-13",
+    recurrence_template_id: "todo-template",
+  });
+
+  await todosService.deleteTodo(USER_ID, "todo-selected-done", "future");
+
+  assert.deepEqual(await liveTodoIds(), ["todo-past", "todo-template"]);
+  assert.ok((await getTodo("todo-selected-done")).deleted_at);
+  assert.ok((await getTodo("todo-future")).deleted_at);
+  assert.equal((await getTodo("todo-template")).recurrence_end_date, "2026-06-16");
+  assert.equal((await getTodo("todo-past")).recurrence_end_date, "2026-06-16");
+
+  const completed = await todosService.completeTodo(
+    USER_ID,
+    "todo-template",
+    {}
+  );
+  assert.equal(completed.next_recurring_todo, null);
+  assert.equal(await countTodos(), 4);
+});
+
+test("delete scope all removes the complete series but never another user's rows", async () => {
+  await insertTodo("todo-template");
+  await insertTodo("todo-past", {
+    status: "done",
+    completed_at: "2026-06-13T08:00:00.000Z",
+    scheduled_date: "2026-06-13",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-selected", {
+    scheduled_date: "2026-06-17",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-future", {
+    scheduled_date: "2026-06-19",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("foreign-row", {
+    user_id: "another-user",
+    scheduled_date: "2026-06-21",
+    recurrence_template_id: "todo-template",
+  });
+
+  await todosService.deleteTodo(USER_ID, "todo-selected", "all");
+
+  assert.deepEqual(await liveTodoIds(), []);
+  assert.deepEqual(await liveTodoIds("another-user"), ["foreign-row"]);
+});
+
+test("sync push todo delete supports future scope", async () => {
+  await insertTodo("todo-template");
+  await insertTodo("todo-selected", {
+    scheduled_date: "2026-06-17",
+    recurrence_template_id: "todo-template",
+  });
+  await insertTodo("todo-future", {
+    scheduled_date: "2026-06-19",
+    recurrence_template_id: "todo-template",
+  });
+
+  const results = await syncService.processPush(USER_ID, [
+    {
+      op: "delete",
+      type: "todo",
+      payload: {
+        id: "todo-selected",
+        delete_scope: "future",
+        deleted_at: "2026-06-20T00:00:00.000Z",
+        updated_at: "2026-06-20T00:00:00.000Z",
+      },
+    },
+  ]);
+
+  assert.deepEqual(results, [{ id: "todo-selected", status: "applied" }]);
+  assert.deepEqual(await liveTodoIds(), ["todo-template"]);
+  assert.equal((await getTodo("todo-template")).recurrence_end_date, "2026-06-16");
 });

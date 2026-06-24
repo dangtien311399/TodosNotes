@@ -49,6 +49,27 @@ const dbArgs = (vals: unknown[]): (string | number | bigint | ArrayBuffer | null
 const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
 
+export class SyncPullQueryError extends Error {
+  constructor(
+    public readonly queryName: string,
+    cause: unknown
+  ) {
+    super(`Sync pull query failed: ${queryName}`, { cause });
+    this.name = "SyncPullQueryError";
+  }
+}
+
+const runSyncQuery = async <T>(
+  queryName: string,
+  operation: Promise<T>
+): Promise<T> => {
+  try {
+    return await operation;
+  } catch (error) {
+    throw new SyncPullQueryError(queryName, error);
+  }
+};
+
 const syncTodoFields = [
   "parent_id",
   "title",
@@ -101,6 +122,45 @@ const updateExistingTodoFromSync = async (
   });
 };
 
+const syncNoteFields = [
+  "title",
+  "type",
+  "body",
+  "body_delta",
+  "cornell_cue",
+  "cornell_cue_delta",
+  "cornell_summary",
+  "cornell_summary_delta",
+  "content_format",
+  "is_pinned",
+  "deleted_at",
+] as const;
+
+const updateExistingNoteFromSync = async (
+  userId: string,
+  p: Record<string, unknown>
+): Promise<void> => {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+
+  for (const field of syncNoteFields) {
+    if (hasOwn(p, field)) {
+      sets.push(`${field} = ?`);
+      args.push(p[field] ?? null);
+    }
+  }
+
+  sets.push("updated_at = ?");
+  args.push((p.updated_at as string | null) ?? nowISO());
+  args.push(p.id, userId);
+
+  await turso.execute({
+    sql: `UPDATE notes SET ${sets.join(", ")}
+          WHERE id = ? AND user_id = ?`,
+    args: dbArgs(args),
+  });
+};
+
 // ── getChangesSince ──────────────────────────────────────────────────────────
 
 /**
@@ -127,37 +187,37 @@ export const getChangesSince = async (
     templateItemsRes,
     runsRes, runItemsRes,
   ] = await Promise.all([
-    turso.execute({
+    runSyncQuery("users", turso.execute({
       sql: isInitial
         ? "SELECT * FROM users WHERE id = ? AND deleted_at IS NULL"
         : "SELECT * FROM users WHERE id = ? AND updated_at > ?",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("tags", turso.execute({
       sql: isInitial
         ? "SELECT * FROM tags WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC"
         : "SELECT * FROM tags WHERE user_id = ? AND updated_at > ? ORDER BY updated_at DESC",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("todos", turso.execute({
       sql: isInitial
         ? "SELECT * FROM todos WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC"
         : "SELECT * FROM todos WHERE user_id = ? AND updated_at > ? ORDER BY updated_at DESC",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("notes", turso.execute({
       sql: isInitial
         ? "SELECT * FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC"
         : "SELECT * FROM notes WHERE user_id = ? AND updated_at > ? ORDER BY updated_at DESC",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("habits", turso.execute({
       sql: isInitial
         ? "SELECT * FROM habits WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC"
         : "SELECT * FROM habits WHERE user_id = ? AND updated_at > ? ORDER BY updated_at DESC",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("habit_logs", turso.execute({
       sql: isInitial
         ? `SELECT l.id, l.habit_id, l.log_date, l.completed, l.note,
                   l.created_at, l.updated_at, l.deleted_at
@@ -172,8 +232,8 @@ export const getChangesSince = async (
            WHERE h.user_id = ? AND l.updated_at > ?
            ORDER BY l.updated_at DESC`,
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_categories", turso.execute({
       sql: isInitial
         ? `SELECT * FROM checklist_categories
            WHERE (user_id = ? OR is_system = 1) AND deleted_at IS NULL
@@ -182,8 +242,8 @@ export const getChangesSince = async (
            WHERE (user_id = ? OR is_system = 1) AND updated_at > ?
            ORDER BY is_system DESC, sort_order ASC, updated_at DESC`,
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_templates", turso.execute({
       sql: isInitial
         ? `SELECT * FROM checklist_templates
            WHERE (user_id = ? OR is_system = 1) AND deleted_at IS NULL
@@ -192,8 +252,8 @@ export const getChangesSince = async (
            WHERE (user_id = ? OR is_system = 1) AND updated_at > ?
            ORDER BY sort_order ASC, updated_at DESC`,
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_template_orders", turso.execute({
       sql: isInitial
         ? `SELECT * FROM checklist_template_orders
            WHERE user_id = ? AND deleted_at IS NULL
@@ -202,8 +262,8 @@ export const getChangesSince = async (
            WHERE user_id = ? AND updated_at > ?
            ORDER BY sort_order ASC, updated_at DESC`,
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_template_items", turso.execute({
       sql: isInitial
         ? `SELECT i.* FROM checklist_template_items i
            JOIN checklist_templates t ON t.id = i.template_id
@@ -214,14 +274,14 @@ export const getChangesSince = async (
            WHERE (t.user_id = ? OR t.is_system = 1) AND i.updated_at > ?
            ORDER BY i.updated_at DESC`,
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_runs", turso.execute({
       sql: isInitial
         ? "SELECT * FROM checklist_runs WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC"
         : "SELECT * FROM checklist_runs WHERE user_id = ? AND updated_at > ? ORDER BY updated_at DESC",
       args: a1,
-    }),
-    turso.execute({
+    })),
+    runSyncQuery("checklist_run_items", turso.execute({
       sql: isInitial
         ? `SELECT ri.* FROM checklist_run_items ri
            JOIN checklist_runs r ON r.id = ri.run_id
@@ -232,7 +292,7 @@ export const getChangesSince = async (
            WHERE r.user_id = ? AND ri.updated_at > ?
            ORDER BY ri.updated_at DESC`,
       args: a1,
-    }),
+    })),
   ]);
 
   // ── Phase 2: association queries for todo + note (PARALLEL) ──────────────
@@ -245,44 +305,44 @@ export const getChangesSince = async (
 
   const [tTagsRes, tNotesRes, nTagsRes, nLinksRes, nTodosRes] = await Promise.all([
     todoIds.length > 0
-      ? turso.execute({
+      ? runSyncQuery("todo_tags", turso.execute({
           sql: `SELECT tt.todo_id, tt.tag_id
                 FROM todo_tags tt JOIN tags g ON g.id = tt.tag_id
                 WHERE tt.todo_id IN (${inPlaceholders(todoIds)}) AND g.deleted_at IS NULL`,
           args: todoIds,
-        })
+        }))
       : Promise.resolve(emptyResult),
     todoIds.length > 0
-      ? turso.execute({
+      ? runSyncQuery("todo_linked_notes", turso.execute({
           sql: `SELECT ntl.todo_id, ntl.note_id
                 FROM note_todo_links ntl JOIN notes n ON n.id = ntl.note_id
                 WHERE ntl.todo_id IN (${inPlaceholders(todoIds)}) AND n.deleted_at IS NULL`,
           args: todoIds,
-        })
+        }))
       : Promise.resolve(emptyResult),
     noteIds.length > 0
-      ? turso.execute({
+      ? runSyncQuery("note_tags", turso.execute({
           sql: `SELECT nt.note_id, nt.tag_id
                 FROM note_tags nt JOIN tags g ON g.id = nt.tag_id
                 WHERE nt.note_id IN (${inPlaceholders(noteIds)}) AND g.deleted_at IS NULL`,
           args: noteIds,
-        })
+        }))
       : Promise.resolve(emptyResult),
     noteIds.length > 0
-      ? turso.execute({
+      ? runSyncQuery("note_links", turso.execute({
           sql: `SELECT nl.source_note_id, nl.target_note_id, nl.label
                 FROM note_links nl JOIN notes t ON t.id = nl.target_note_id
                 WHERE nl.source_note_id IN (${inPlaceholders(noteIds)}) AND t.deleted_at IS NULL`,
           args: noteIds,
-        })
+        }))
       : Promise.resolve(emptyResult),
     noteIds.length > 0
-      ? turso.execute({
+      ? runSyncQuery("note_linked_todos", turso.execute({
           sql: `SELECT ntl.note_id, ntl.todo_id
                 FROM note_todo_links ntl JOIN todos t ON t.id = ntl.todo_id
                 WHERE ntl.note_id IN (${inPlaceholders(noteIds)}) AND t.deleted_at IS NULL`,
           args: noteIds,
-        })
+        }))
       : Promise.resolve(emptyResult),
   ]);
 
@@ -494,23 +554,36 @@ export const upsertEntity = async (
     }
 
     case "note": {
+      if (opts.partialUpdate) {
+        await updateExistingNoteFromSync(userId, p);
+        break;
+      }
+
       await turso.execute({
         sql: `INSERT INTO notes
-              (id, user_id, title, type, body, cornell_cue, cornell_summary, is_pinned,
-               created_at, updated_at, deleted_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              (id, user_id, title, type, body, body_delta, cornell_cue,
+               cornell_cue_delta, cornell_summary, cornell_summary_delta,
+               content_format, is_pinned, created_at, updated_at, deleted_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 type = excluded.type,
                 body = excluded.body,
+                body_delta = excluded.body_delta,
                 cornell_cue = excluded.cornell_cue,
+                cornell_cue_delta = excluded.cornell_cue_delta,
                 cornell_summary = excluded.cornell_summary,
+                cornell_summary_delta = excluded.cornell_summary_delta,
+                content_format = excluded.content_format,
                 is_pinned = excluded.is_pinned,
                 updated_at = excluded.updated_at,
                 deleted_at = excluded.deleted_at`,
         args: dbArgs([
           p.id, userId, p.title, p.type ?? "free",
-          p.body ?? null, p.cornell_cue ?? null, p.cornell_summary ?? null,
+          p.body ?? null, p.body_delta ?? null,
+          p.cornell_cue ?? null, p.cornell_cue_delta ?? null,
+          p.cornell_summary ?? null, p.cornell_summary_delta ?? null,
+          p.content_format ?? "plain",
           p.is_pinned ?? 0,
           createdAt, updatedAt, deletedAt,
         ]),

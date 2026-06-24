@@ -8,9 +8,16 @@ import type {
   AttachTagInput,
   ListNotesQueryInput,
 } from "../schemas/api/notes.js";
+import { SyncNotePayloadSchema } from "../schemas/api/notes.js";
+import {
+  quillDeltaToPlainText,
+  type QuillDelta,
+} from "../schemas/quill-delta.js";
 
 export class ServiceError extends Error {
-  constructor(public code: "not_found" | "duplicate" | "self_link") {
+  constructor(
+    public code: "not_found" | "duplicate" | "self_link" | "bad_input"
+  ) {
     super(code);
   }
 }
@@ -22,6 +29,117 @@ const wrapRepoError = (e: unknown): never => {
   throw e;
 };
 
+type NoteContentInput = {
+  type?: "free" | "cornell";
+  body?: string | null;
+  body_delta?: QuillDelta | null;
+  cornell_cue?: string | null;
+  cornell_cue_delta?: QuillDelta | null;
+  cornell_summary?: string | null;
+  cornell_summary_delta?: QuillDelta | null;
+};
+
+type NoteContentState = Required<NoteContentInput> & {
+  content_format: notesRepo.NoteContentFormat;
+};
+
+const hasOwn = (value: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(value, key);
+
+const resolveSection = (
+  currentPlain: string | null,
+  currentDelta: QuillDelta | null,
+  patch: NoteContentInput,
+  plainKey: "body" | "cornell_cue" | "cornell_summary",
+  deltaKey: "body_delta" | "cornell_cue_delta" | "cornell_summary_delta"
+): { plain: string | null; delta: QuillDelta | null } => {
+  const hasPlain = hasOwn(patch, plainKey);
+  const hasDelta = hasOwn(patch, deltaKey);
+
+  if (hasDelta) {
+    const delta = patch[deltaKey] ?? null;
+    return {
+      plain:
+        delta !== null
+          ? quillDeltaToPlainText(delta)
+          : hasPlain
+            ? patch[plainKey] ?? null
+            : currentPlain,
+      delta,
+    };
+  }
+
+  if (hasPlain) {
+    return {
+      plain: patch[plainKey] ?? null,
+      // A direct plain-text edit invalidates the previous rich representation.
+      delta: null,
+    };
+  }
+
+  return { plain: currentPlain, delta: currentDelta };
+};
+
+const normalizeNoteContent = (
+  current: notesRepo.NoteRow | null,
+  patch: NoteContentInput
+): NoteContentState => {
+  const type = patch.type ?? current?.type ?? "free";
+  const body = resolveSection(
+    current?.body ?? null,
+    current?.body_delta ?? null,
+    patch,
+    "body",
+    "body_delta"
+  );
+  let cue = resolveSection(
+    current?.cornell_cue ?? null,
+    current?.cornell_cue_delta ?? null,
+    patch,
+    "cornell_cue",
+    "cornell_cue_delta"
+  );
+  let summary = resolveSection(
+    current?.cornell_summary ?? null,
+    current?.cornell_summary_delta ?? null,
+    patch,
+    "cornell_summary",
+    "cornell_summary_delta"
+  );
+
+  if (type === "free") {
+    cue = { plain: null, delta: null };
+    summary = { plain: null, delta: null };
+  } else if (!cue.plain?.trim() || !summary.plain?.trim()) {
+    throw new ServiceError("bad_input");
+  }
+
+  const contentFormat: notesRepo.NoteContentFormat =
+    body.delta !== null || cue.delta !== null || summary.delta !== null
+      ? "quill_delta_v1"
+      : "plain";
+
+  return {
+    type,
+    body: body.plain,
+    body_delta: body.delta,
+    cornell_cue: cue.plain,
+    cornell_cue_delta: cue.delta,
+    cornell_summary: summary.plain,
+    cornell_summary_delta: summary.delta,
+    content_format: contentFormat,
+  };
+};
+
+export const normalizeSyncNoteContent = (
+  current: notesRepo.NoteRow | null,
+  payload: Record<string, unknown>
+): NoteContentState => {
+  const parsed = SyncNotePayloadSchema.safeParse(payload);
+  if (!parsed.success) throw new ServiceError("bad_input");
+  return normalizeNoteContent(current, parsed.data);
+};
+
 export const createNote = async (
   userId: string,
   input: CreateNoteInput
@@ -29,13 +147,11 @@ export const createNote = async (
   note: notesRepo.NoteRow;
   tags: tagsRepo.TagRow[];
 }> => {
+  const content = normalizeNoteContent(null, input);
   const note = await notesRepo.createNote({
     user_id: userId,
     title: input.title,
-    type: input.type,
-    body: input.body ?? null,
-    cornell_cue: input.type === "cornell" ? input.cornell_cue : null,
-    cornell_summary: input.type === "cornell" ? input.cornell_summary : null,
+    ...content,
     is_pinned: input.is_pinned ?? false,
   });
 
@@ -86,12 +202,13 @@ export const updateNote = async (
   id: string,
   patch: UpdateNoteInput
 ): Promise<notesRepo.NoteRow> => {
-  // Khi chuyển sang type='free', force null cornell_cue/summary để clean data cũ.
-  const finalPatch: notesRepo.UpdateNotePatch = { ...patch };
-  if (patch.type === "free") {
-    finalPatch.cornell_cue = null;
-    finalPatch.cornell_summary = null;
-  }
+  const current = await notesRepo.getNoteByIdScoped(id, userId);
+  if (!current) throw new ServiceError("not_found");
+  const content = normalizeNoteContent(current, patch);
+  const finalPatch: notesRepo.UpdateNotePatch = {
+    ...patch,
+    ...content,
+  };
   const row = await notesRepo.updateNote(id, userId, finalPatch);
   if (!row) throw new ServiceError("not_found");
   return row;

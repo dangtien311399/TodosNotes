@@ -1,7 +1,9 @@
 import { turso } from "../config/db.js";
 import { newId } from "../utils/id.js";
-import { nowISO } from "../utils/time.js";
+import { addDays, nowISO } from "../utils/time.js";
 import type { TagRow } from "./tags.js";
+
+export type TodoDeleteScope = "this" | "future" | "all";
 
 export type TodoRow = {
   id: string;
@@ -486,16 +488,17 @@ export const completeTodo = async (
 export const findRecurringOccurrenceByDate = async (
   userId: string,
   recurrenceTemplateId: string,
-  scheduledDate: string
+  scheduledDate: string,
+  includeDeleted = false
 ): Promise<TodoRow | null> => {
   const res = await turso.execute({
     sql: `SELECT ${TODO_COLUMNS} FROM todos
           WHERE user_id = ?
-            AND deleted_at IS NULL
+            ${includeDeleted ? "" : "AND deleted_at IS NULL"}
             AND scheduled_date = ?
             AND recurrence_type IS NOT NULL
             AND COALESCE(recurrence_template_id, id) = ?
-          ORDER BY created_at ASC, id ASC
+          ORDER BY (deleted_at IS NOT NULL) ASC, created_at ASC, id ASC
           LIMIT 1`,
     args: [userId, scheduledDate, recurrenceTemplateId],
   });
@@ -562,6 +565,144 @@ export const createNextRecurringTodo = async (
   return row;
 };
 
+type TodoTreeRow = TodoRow & { depth: number };
+
+export const ensureRecurringSubtasksCopied = async (
+  sourceRootId: string,
+  targetRootId: string,
+  userId: string
+): Promise<void> => {
+  const [sourceRoot, targetRoot] = await Promise.all([
+    getTodoById(sourceRootId),
+    getTodoByIdScoped(targetRootId, userId),
+  ]);
+  if (
+    !sourceRoot ||
+    sourceRoot.user_id !== userId ||
+    !targetRoot
+  ) {
+    throw new TodoRepoError("not_found");
+  }
+
+  const targetChildren = await turso.execute({
+    sql: `SELECT id FROM todos
+          WHERE parent_id = ? AND user_id = ? AND deleted_at IS NULL
+          LIMIT 1`,
+    args: [targetRootId, userId],
+  });
+  if (targetChildren.rows.length > 0) return;
+
+  const sourceDeletedSql =
+    sourceRoot.deleted_at === null
+      ? "deleted_at IS NULL"
+      : "deleted_at = ?";
+  const sourceDeletedArgs =
+    sourceRoot.deleted_at === null ? [] : [sourceRoot.deleted_at];
+  const sourceTree = await turso.execute({
+    sql: `WITH RECURSIVE subtree AS (
+            SELECT ${TODO_COLUMNS}, 1 AS depth
+            FROM todos
+            WHERE parent_id = ? AND user_id = ? AND ${sourceDeletedSql}
+            UNION ALL
+            SELECT ${TODO_COLUMNS.split(", ").map((column) => `t.${column}`).join(", ")},
+                   subtree.depth + 1 AS depth
+            FROM todos t
+            INNER JOIN subtree ON t.parent_id = subtree.id
+            WHERE t.user_id = ? AND t.${sourceDeletedSql}
+          )
+          SELECT * FROM subtree
+          ORDER BY depth ASC, position ASC, created_at ASC, id ASC`,
+    args: [
+      sourceRootId,
+      userId,
+      ...sourceDeletedArgs,
+      userId,
+      ...sourceDeletedArgs,
+    ],
+  });
+  if (sourceTree.rows.length === 0) return;
+
+  const sourceRows = sourceTree.rows.map((row) => {
+    const record = row as unknown as Record<string, unknown>;
+    return {
+      ...mapRow(record),
+      depth: Number(record.depth),
+    } satisfies TodoTreeRow;
+  });
+
+  const idMap = new Map<string, string>([[sourceRootId, targetRootId]]);
+  for (const source of sourceRows) {
+    idMap.set(source.id, newId());
+  }
+
+  const now = nowISO();
+  const statements: {
+    sql: string;
+    args: (string | number | null)[];
+  }[] = [];
+
+  for (const source of sourceRows) {
+    const clonedId = idMap.get(source.id);
+    const clonedParentId =
+      source.parent_id === null ? targetRootId : idMap.get(source.parent_id);
+    if (!clonedId || !clonedParentId) {
+      throw new Error("ensureRecurringSubtasksCopied: invalid subtree mapping");
+    }
+    const clonedTriggerId =
+      source.trigger_after_todo_id === null
+        ? null
+        : idMap.get(source.trigger_after_todo_id) ??
+          source.trigger_after_todo_id;
+
+    statements.push(
+      {
+        sql: `INSERT INTO todos
+              (id, user_id, parent_id, title, description, status, position,
+               is_frog, frog_date, is_important, is_urgent,
+               estimated_minutes, actual_minutes, start_at, due_at, scheduled_date, time,
+               trigger_after_todo_id, habit_id, completed_at,
+               recurrence_type, recurrence_interval, recurrence_days_of_week,
+               recurrence_end_date, recurrence_template_id,
+               created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL,
+                      ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          clonedId,
+          userId,
+          clonedParentId,
+          source.title,
+          source.description,
+          source.position,
+          source.is_frog,
+          source.frog_date,
+          source.is_important,
+          source.is_urgent,
+          source.estimated_minutes,
+          source.start_at,
+          source.due_at,
+          source.scheduled_date,
+          clonedTriggerId,
+          source.habit_id,
+          source.recurrence_type,
+          source.recurrence_interval,
+          source.recurrence_days_of_week,
+          source.recurrence_end_date,
+          source.recurrence_template_id,
+          now,
+          now,
+        ],
+      },
+      {
+        sql: `INSERT INTO todo_tags (todo_id, tag_id)
+              SELECT ?, tag_id FROM todo_tags WHERE todo_id = ?`,
+        args: [clonedId, source.id],
+      }
+    );
+  }
+
+  await turso.batch(statements, "write");
+};
+
 export const uncompleteTodo = async (
   id: string,
   userId: string
@@ -575,6 +716,104 @@ export const uncompleteTodo = async (
   });
   if (res.rowsAffected === 0) return null;
   return getTodoByIdScoped(id, userId);
+};
+
+export type DeleteTodoResult = {
+  deleted_ids: string[];
+};
+
+export const softDeleteTodoByScope = async (
+  id: string,
+  userId: string,
+  scope: TodoDeleteScope,
+  deletedAt = nowISO()
+): Promise<DeleteTodoResult | null> => {
+  const target = await getTodoByIdScoped(id, userId);
+  if (!target) return null;
+
+  const isRecurring =
+    target.recurrence_type !== null || target.recurrence_template_id !== null;
+  const seriesId = target.recurrence_template_id ?? target.id;
+
+  let rootsSql =
+    "SELECT id FROM todos WHERE id = ? AND user_id = ? AND deleted_at IS NULL";
+  let rootsArgs: (string | null)[] = [id, userId];
+  let recurrenceCutoff: string | null = null;
+
+  if (isRecurring && scope === "all") {
+    rootsSql = `SELECT id FROM todos
+                WHERE user_id = ? AND deleted_at IS NULL
+                  AND (id = ? OR recurrence_template_id = ?)`;
+    rootsArgs = [userId, seriesId, seriesId];
+  } else if (isRecurring && scope === "future") {
+    if (!target.scheduled_date) throw new TodoRepoError("bad_input");
+    rootsSql = `SELECT id FROM todos
+                WHERE user_id = ? AND deleted_at IS NULL
+                  AND (id = ? OR recurrence_template_id = ?)
+                  AND scheduled_date >= ?`;
+    rootsArgs = [userId, seriesId, seriesId, target.scheduled_date];
+    recurrenceCutoff = addDays(target.scheduled_date, -1);
+  }
+
+  const treeRes = await turso.execute({
+    sql: `WITH RECURSIVE roots(id) AS (
+            ${rootsSql}
+          ),
+          subtree(id) AS (
+            SELECT id FROM roots
+            UNION
+            SELECT t.id FROM todos t
+            INNER JOIN subtree p ON t.parent_id = p.id
+            WHERE t.user_id = ? AND t.deleted_at IS NULL
+          )
+          SELECT id FROM subtree`,
+    args: [...rootsArgs, userId],
+  });
+  const deletedIds = (treeRes.rows as unknown as { id: string }[]).map(
+    (row) => row.id
+  );
+
+  const statements: {
+    sql: string;
+    args: (string | null)[];
+  }[] = [];
+
+  if (recurrenceCutoff !== null && target.scheduled_date !== null) {
+    statements.push({
+      sql: `UPDATE todos
+            SET recurrence_end_date = CASE
+                  WHEN recurrence_end_date IS NULL OR recurrence_end_date > ?
+                    THEN ?
+                  ELSE recurrence_end_date
+                END,
+                updated_at = ?
+            WHERE user_id = ? AND deleted_at IS NULL
+              AND (id = ? OR recurrence_template_id = ?)
+              AND scheduled_date < ?
+              AND recurrence_type IS NOT NULL`,
+      args: [
+        recurrenceCutoff,
+        recurrenceCutoff,
+        deletedAt,
+        userId,
+        seriesId,
+        seriesId,
+        target.scheduled_date,
+      ],
+    });
+  }
+
+  statements.push(
+    ...deletedIds.map((todoId) => ({
+      sql: "UPDATE todos SET deleted_at = ?, updated_at = ? WHERE id = ?",
+      args: [deletedAt, deletedAt, todoId],
+    }))
+  );
+
+  if (statements.length > 0) {
+    await turso.batch(statements, "write");
+  }
+  return { deleted_ids: deletedIds };
 };
 
 // Overload: userId tùy chọn (admin web không cần truyền)

@@ -101,22 +101,46 @@ const createNextRecurringTodo = async (
   userId: string,
   source: todosRepo.TodoRow
 ): Promise<todosRepo.TodoRow | null> => {
-  const scheduledDate = nextRecurrenceDate(source);
-  if (!scheduledDate) return null;
-
   const recurrenceTemplateId = source.recurrence_template_id ?? source.id;
-  const existing = await todosRepo.findRecurringOccurrenceByDate(
-    userId,
-    recurrenceTemplateId,
-    scheduledDate
-  );
-  if (existing) return existing;
+  let cursor = source;
 
-  return todosRepo.createNextRecurringTodo(
-    source,
-    scheduledDate,
-    recurrenceTemplateId
-  );
+  // A deleted single occurrence is a recurrence exception. Skip its date
+  // instead of recreating it when an earlier occurrence completes later.
+  for (let skipped = 0; skipped < 1_000; skipped += 1) {
+    const scheduledDate = nextRecurrenceDate(cursor);
+    if (!scheduledDate) return null;
+
+    const existing = await todosRepo.findRecurringOccurrenceByDate(
+      userId,
+      recurrenceTemplateId,
+      scheduledDate,
+      true
+    );
+    if (!existing) {
+      const created = await todosRepo.createNextRecurringTodo(
+        source,
+        scheduledDate,
+        recurrenceTemplateId
+      );
+      await todosRepo.ensureRecurringSubtasksCopied(
+        source.id,
+        created.id,
+        userId
+      );
+      return created;
+    }
+    if (existing.deleted_at === null) {
+      await todosRepo.ensureRecurringSubtasksCopied(
+        source.id,
+        existing.id,
+        userId
+      );
+      return existing;
+    }
+    cursor = { ...cursor, scheduled_date: scheduledDate };
+  }
+
+  return null;
 };
 
 const resolveTagIds = async (
@@ -245,9 +269,34 @@ export const updateTodo = async (
   }
 };
 
-export const deleteTodo = async (userId: string, id: string): Promise<void> => {
-  const ok = await todosRepo.softDeleteTodo(id, userId);
-  if (!ok) throw new ServiceError("not_found");
+export const deleteTodo = async (
+  userId: string,
+  id: string,
+  scope: todosRepo.TodoDeleteScope = "this",
+  deletedAt?: string
+): Promise<void> => {
+  const source = await todosRepo.getTodoByIdScoped(id, userId);
+  if (!source) throw new ServiceError("not_found");
+
+  try {
+    const result = await todosRepo.softDeleteTodoByScope(
+      id,
+      userId,
+      scope,
+      deletedAt
+    );
+    if (!result) throw new ServiceError("not_found");
+
+    if (
+      scope === "this" &&
+      (source.recurrence_type !== null ||
+        source.recurrence_template_id !== null)
+    ) {
+      await createNextRecurringTodo(userId, source);
+    }
+  } catch (e) {
+    return wrapRepo(e);
+  }
 };
 
 export const completeTodo = async (

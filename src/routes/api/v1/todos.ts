@@ -4,6 +4,7 @@ import {
   UpdateTodoSchema,
   ListTodosQuerySchema,
   CompleteTodoSchema,
+  DeleteTodoQuerySchema,
   ToggleFrogSchema,
   ClassifyEisenhowerSchema,
   MoveToDaySchema,
@@ -105,8 +106,14 @@ export default async function todosRoutes(app: FastifyInstance) {
 
   // DELETE /:id
   app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
+    const parsed = DeleteTodoQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
     try {
-      await todos.deleteTodo(req.userId, req.params.id);
+      await todos.deleteTodo(req.userId, req.params.id, parsed.data.scope);
       return reply.code(204).send();
     } catch (e) {
       return mapErr(e, reply);

@@ -1,4 +1,24 @@
 import { z } from "zod";
+import {
+  QuillDeltaSchema,
+  quillDeltaToPlainText,
+} from "../quill-delta.js";
+
+const richTextSchema = (maxPlainTextLength: number) =>
+  QuillDeltaSchema.superRefine((delta, ctx) => {
+    if (quillDeltaToPlainText(delta).length > maxPlainTextLength) {
+      ctx.addIssue({
+        code: "too_big",
+        maximum: maxPlainTextLength,
+        origin: "string",
+        inclusive: true,
+        message: `Plain text extracted from Delta must not exceed ${maxPlainTextLength} characters`,
+      });
+    }
+  });
+
+const BodyDeltaSchema = richTextSchema(100_000);
+const CornellDeltaSchema = richTextSchema(10_000);
 
 const Base = z.object({
   title: z.string().trim().min(1).max(500),
@@ -9,13 +29,42 @@ const Base = z.object({
 const Free = Base.extend({
   type: z.literal("free"),
   body: z.string().max(100_000).optional(),
+  body_delta: BodyDeltaSchema.nullable().optional(),
 });
 
 const Cornell = Base.extend({
   type: z.literal("cornell"),
   body: z.string().max(100_000).optional(),
-  cornell_cue: z.string().trim().min(1).max(10_000),
-  cornell_summary: z.string().trim().min(1).max(10_000),
+  body_delta: BodyDeltaSchema.nullable().optional(),
+  cornell_cue: z.string().trim().max(10_000).optional(),
+  cornell_cue_delta: CornellDeltaSchema.nullable().optional(),
+  cornell_summary: z.string().trim().max(10_000).optional(),
+  cornell_summary_delta: CornellDeltaSchema.nullable().optional(),
+}).superRefine((data, ctx) => {
+  const cueText =
+    data.cornell_cue_delta !== null && data.cornell_cue_delta !== undefined
+      ? quillDeltaToPlainText(data.cornell_cue_delta)
+      : data.cornell_cue;
+  const summaryText =
+    data.cornell_summary_delta !== null &&
+    data.cornell_summary_delta !== undefined
+      ? quillDeltaToPlainText(data.cornell_summary_delta)
+      : data.cornell_summary;
+
+  if (!cueText?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["cornell_cue"],
+      message: "Cornell notes require a non-empty Cues Column",
+    });
+  }
+  if (!summaryText?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["cornell_summary"],
+      message: "Cornell notes require a non-empty Summary Area",
+    });
+  }
 });
 
 export const CreateNoteSchema = z.discriminatedUnion("type", [Free, Cornell]);
@@ -26,15 +75,26 @@ export const UpdateNoteSchema = z
     title: z.string().trim().min(1).max(500).optional(),
     type: z.enum(["free", "cornell"]).optional(),
     body: z.string().max(100_000).nullable().optional(),
+    body_delta: BodyDeltaSchema.nullable().optional(),
     cornell_cue: z.string().trim().max(10_000).nullable().optional(),
+    cornell_cue_delta: CornellDeltaSchema.nullable().optional(),
     cornell_summary: z.string().trim().max(10_000).nullable().optional(),
+    cornell_summary_delta: CornellDeltaSchema.nullable().optional(),
     is_pinned: z.boolean().optional(),
-  })
-  .refine(
-    (d) => d.type !== "cornell" || (!!d.cornell_cue && !!d.cornell_summary),
-    { message: "cornell type requires cornell_cue and cornell_summary" }
-  );
+  });
 export type UpdateNoteInput = z.infer<typeof UpdateNoteSchema>;
+
+export const SyncNotePayloadSchema = z
+  .object({
+    type: z.enum(["free", "cornell"]).optional(),
+    body: z.string().max(100_000).nullable().optional(),
+    body_delta: BodyDeltaSchema.nullable().optional(),
+    cornell_cue: z.string().trim().max(10_000).nullable().optional(),
+    cornell_cue_delta: CornellDeltaSchema.nullable().optional(),
+    cornell_summary: z.string().trim().max(10_000).nullable().optional(),
+    cornell_summary_delta: CornellDeltaSchema.nullable().optional(),
+  })
+  .passthrough();
 
 export const NoteLinkSchema = z.object({
   targetId: z.uuid(),

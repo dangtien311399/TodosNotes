@@ -14,6 +14,7 @@ const mapErr = (e: unknown, reply: FastifyReply): FastifyReply => {
     if (e.code === "not_found") return reply.code(404).send({ error: "not_found" });
     if (e.code === "duplicate") return reply.code(409).send({ error: "duplicate" });
     if (e.code === "self_link") return reply.code(400).send({ error: "self_link" });
+    if (e.code === "bad_input") return reply.code(400).send({ error: "bad_input" });
   }
   if (e instanceof Error && e.message === "bad_cursor") {
     return reply.code(400).send({ error: "bad_cursor" });

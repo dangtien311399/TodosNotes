@@ -8,8 +8,11 @@
  */
 import type { FastifyInstance } from "fastify";
 import { PullQuerySchema, PushBodySchema } from "../../../schemas/api/sync.js";
-import { getChangesSince } from "../../../repositories/sync.repo.js";
 import { processPush } from "../../../services/sync.service.js";
+import {
+  isTransientSyncPullError,
+  pullSyncChanges,
+} from "../../../services/sync-pull.js";
 import { nowISO } from "../../../utils/time.js";
 
 export default async function syncRoutes(app: FastifyInstance) {
@@ -31,12 +34,29 @@ export default async function syncRoutes(app: FastifyInstance) {
     }
 
     const since = parsed.data.since; // undefined = initial
-    const changes = await getChangesSince(req.userId, since ?? null);
+    try {
+      const changes = await pullSyncChanges(req.userId, since ?? null);
 
-    return reply.send({
-      server_time: nowISO(),
-      changes,
-    });
+      return reply.send({
+        server_time: nowISO(),
+        changes,
+      });
+    } catch (error) {
+      const retryable = isTransientSyncPullError(error);
+      req.log.error(
+        {
+          err: error,
+          request_id: req.id,
+          sync_mode: since ? "delta" : "initial",
+          retryable,
+        },
+        "Sync pull failed"
+      );
+      return reply.code(retryable ? 503 : 500).send({
+        error: retryable ? "sync_unavailable" : "sync_failed",
+        request_id: req.id,
+      });
+    }
   });
 
   // ── POST /push ──────────────────────────────────────────────────────────────

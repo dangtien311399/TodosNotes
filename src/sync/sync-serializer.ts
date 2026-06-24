@@ -81,8 +81,12 @@ export type SyncNote = {
   title: string;
   type: "free" | "cornell";
   body: string | null;
+  body_delta: QuillDelta | null;
   cornell_cue: string | null;
+  cornell_cue_delta: QuillDelta | null;
   cornell_summary: string | null;
+  cornell_summary_delta: QuillDelta | null;
+  content_format: "plain" | "quill_delta_v1";
   is_pinned: boolean;
   created_at: string;
   updated_at: string;
@@ -236,6 +240,11 @@ export type SyncUser = {
 // ── Utilities ───────────────────────────────────────────────────────────────
 
 import { nowISO } from "../utils/time.js";
+import {
+  parseStoredQuillDelta,
+  serializeQuillDelta,
+  type QuillDelta,
+} from "../schemas/quill-delta.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -300,6 +309,12 @@ export function toSyncEntity(
       };
       return {
         ...row,
+        body_delta: parseStoredQuillDelta(row.body_delta),
+        cornell_cue_delta: parseStoredQuillDelta(row.cornell_cue_delta),
+        cornell_summary_delta: parseStoredQuillDelta(
+          row.cornell_summary_delta
+        ),
+        content_format: row.content_format ?? "plain",
         is_pinned: toBool(row.is_pinned),
         tag_ids: a.tag_ids,
         note_links: a.note_links,
@@ -421,6 +436,21 @@ export function fromSyncEntity(
 
     case "note": {
       if ("is_pinned" in stripped) stripped.is_pinned = fromBool(stripped.is_pinned);
+      if ("body_delta" in stripped) {
+        stripped.body_delta = serializeQuillDelta(
+          (stripped.body_delta as QuillDelta | null) ?? null
+        );
+      }
+      if ("cornell_cue_delta" in stripped) {
+        stripped.cornell_cue_delta = serializeQuillDelta(
+          (stripped.cornell_cue_delta as QuillDelta | null) ?? null
+        );
+      }
+      if ("cornell_summary_delta" in stripped) {
+        stripped.cornell_summary_delta = serializeQuillDelta(
+          (stripped.cornell_summary_delta as QuillDelta | null) ?? null
+        );
+      }
       break;
     }
 

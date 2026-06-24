@@ -1,7 +1,14 @@
 import { turso } from "../config/db.js";
 import { newId } from "../utils/id.js";
 import { nowISO } from "../utils/time.js";
+import {
+  parseStoredQuillDelta,
+  serializeQuillDelta,
+  type QuillDelta,
+} from "../schemas/quill-delta.js";
 import type { TagRow } from "./tags.js";
+
+export type NoteContentFormat = "plain" | "quill_delta_v1";
 
 export type NoteRow = {
   id: string;
@@ -9,8 +16,12 @@ export type NoteRow = {
   title: string;
   type: "free" | "cornell";
   body: string | null;
+  body_delta: QuillDelta | null;
   cornell_cue: string | null;
+  cornell_cue_delta: QuillDelta | null;
   cornell_summary: string | null;
+  cornell_summary_delta: QuillDelta | null;
+  content_format: NoteContentFormat;
   is_pinned: number;
   created_at: string;
   updated_at: string;
@@ -18,7 +29,7 @@ export type NoteRow = {
 };
 
 const NOTE_COLUMNS =
-  "id, user_id, title, type, body, cornell_cue, cornell_summary, is_pinned, created_at, updated_at, deleted_at";
+  "id, user_id, title, type, body, body_delta, cornell_cue, cornell_cue_delta, cornell_summary, cornell_summary_delta, content_format, is_pinned, created_at, updated_at, deleted_at";
 
 const mapRow = (row: Record<string, unknown>): NoteRow => ({
   id: row.id as string,
@@ -26,8 +37,13 @@ const mapRow = (row: Record<string, unknown>): NoteRow => ({
   title: row.title as string,
   type: row.type as NoteRow["type"],
   body: (row.body as string | null) ?? null,
+  body_delta: parseStoredQuillDelta(row.body_delta),
   cornell_cue: (row.cornell_cue as string | null) ?? null,
+  cornell_cue_delta: parseStoredQuillDelta(row.cornell_cue_delta),
   cornell_summary: (row.cornell_summary as string | null) ?? null,
+  cornell_summary_delta: parseStoredQuillDelta(row.cornell_summary_delta),
+  content_format:
+    (row.content_format as NoteContentFormat | undefined) ?? "plain",
   is_pinned: Number(row.is_pinned),
   created_at: row.created_at as string,
   updated_at: row.updated_at as string,
@@ -187,8 +203,12 @@ export type CreateNoteInput = {
   title: string;
   type: "free" | "cornell";
   body?: string | null;
+  body_delta?: QuillDelta | null;
   cornell_cue?: string | null;
+  cornell_cue_delta?: QuillDelta | null;
   cornell_summary?: string | null;
+  cornell_summary_delta?: QuillDelta | null;
+  content_format?: NoteContentFormat;
   is_pinned?: boolean;
 };
 
@@ -197,16 +217,22 @@ export const createNote = async (input: CreateNoteInput): Promise<NoteRow> => {
   const now = nowISO();
   await turso.execute({
     sql: `INSERT INTO notes
-          (id, user_id, title, type, body, cornell_cue, cornell_summary, is_pinned, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, user_id, title, type, body, body_delta, cornell_cue,
+           cornell_cue_delta, cornell_summary, cornell_summary_delta,
+           content_format, is_pinned, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id,
       input.user_id,
       input.title,
       input.type,
       input.body ?? null,
+      serializeQuillDelta(input.body_delta ?? null),
       input.cornell_cue ?? null,
+      serializeQuillDelta(input.cornell_cue_delta ?? null),
       input.cornell_summary ?? null,
+      serializeQuillDelta(input.cornell_summary_delta ?? null),
+      input.content_format ?? "plain",
       input.is_pinned ? 1 : 0,
       now,
       now,
@@ -221,8 +247,12 @@ export type UpdateNotePatch = {
   title?: string;
   type?: "free" | "cornell";
   body?: string | null;
+  body_delta?: QuillDelta | null;
   cornell_cue?: string | null;
+  cornell_cue_delta?: QuillDelta | null;
   cornell_summary?: string | null;
+  cornell_summary_delta?: QuillDelta | null;
+  content_format?: NoteContentFormat;
   is_pinned?: boolean;
 };
 
@@ -245,13 +275,29 @@ export const updateNote = async (
     sets.push("body = ?");
     args.push(patch.body);
   }
+  if (patch.body_delta !== undefined) {
+    sets.push("body_delta = ?");
+    args.push(serializeQuillDelta(patch.body_delta));
+  }
   if (patch.cornell_cue !== undefined) {
     sets.push("cornell_cue = ?");
     args.push(patch.cornell_cue);
   }
+  if (patch.cornell_cue_delta !== undefined) {
+    sets.push("cornell_cue_delta = ?");
+    args.push(serializeQuillDelta(patch.cornell_cue_delta));
+  }
   if (patch.cornell_summary !== undefined) {
     sets.push("cornell_summary = ?");
     args.push(patch.cornell_summary);
+  }
+  if (patch.cornell_summary_delta !== undefined) {
+    sets.push("cornell_summary_delta = ?");
+    args.push(serializeQuillDelta(patch.cornell_summary_delta));
+  }
+  if (patch.content_format !== undefined) {
+    sets.push("content_format = ?");
+    args.push(patch.content_format);
   }
   if (patch.is_pinned !== undefined) {
     sets.push("is_pinned = ?");

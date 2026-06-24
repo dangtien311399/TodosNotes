@@ -66,6 +66,18 @@ export const CompleteTodoSchema = z.object({
 });
 export type CompleteTodoInput = z.infer<typeof CompleteTodoSchema>;
 
+export const DeleteTodoQuerySchema = z
+  .object({
+    scope: z
+      .enum(["this", "future", "this_and_future", "all"])
+      .optional()
+      .default("this"),
+  })
+  .transform(({ scope }) => ({
+    scope: scope === "this_and_future" ? ("future" as const) : scope,
+  }));
+export type DeleteTodoQueryInput = z.infer<typeof DeleteTodoQuerySchema>;
+
 export const ToggleFrogSchema = z.object({ date: IsoDate });
 export type ToggleFrogInput = z.infer<typeof ToggleFrogSchema>;
 

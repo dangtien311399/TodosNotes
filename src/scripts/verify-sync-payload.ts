@@ -17,7 +17,15 @@ const NOT_NULL: Record<string, string[]> = {
   users: ["id", "email", "timezone", "created_at", "updated_at"],
   tags: ["id", "user_id", "name", "color", "created_at", "updated_at"],
   todos: ["id", "user_id", "title", "status", "position", "created_at", "updated_at"],
-  notes: ["id", "user_id", "title", "type", "created_at", "updated_at"],
+  notes: [
+    "id",
+    "user_id",
+    "title",
+    "type",
+    "content_format",
+    "created_at",
+    "updated_at",
+  ],
   habits: ["id", "user_id", "title", "frequency_type", "target_per_period", "start_date", "created_at", "updated_at"],
   habit_logs: ["id", "habit_id", "log_date", "created_at", "updated_at"],
   checklist_categories: ["id", "user_id", "name", "slug", "color", "sort_order", "created_at", "updated_at"],
@@ -31,6 +39,19 @@ const NOT_NULL: Record<string, string[]> = {
 // ── REQUIRED KEYS per entity type (must be present even if null) ─────────────
 const REQUIRED_KEYS: Record<string, string[]> = {
   todos: ["id", "habit_id", "time", "tag_ids", "linked_note_ids"],
+  notes: [
+    "id",
+    "body",
+    "body_delta",
+    "cornell_cue",
+    "cornell_cue_delta",
+    "cornell_summary",
+    "cornell_summary_delta",
+    "content_format",
+    "tag_ids",
+    "note_links",
+    "linked_todo_ids",
+  ],
   habit_logs: ["id", "habit_id", "log_date", "completed", "note", "created_at", "updated_at", "deleted_at"],
   checklist_template_orders: ["id", "user_id", "template_id", "sort_order", "created_at", "updated_at", "deleted_at"],
   checklist_template_items: ["id", "template_id", "position", "title", "description", "is_required", "created_at", "updated_at", "deleted_at"],
@@ -40,6 +61,36 @@ const REQUIRED_KEYS: Record<string, string[]> = {
 
 async function createTestData(userId: string): Promise<void> {
   const now = nowISO();
+
+  await turso.execute({
+    sql: `INSERT INTO notes
+          (id, user_id, title, type, body, body_delta, cornell_cue,
+           cornell_cue_delta, cornell_summary, cornell_summary_delta,
+           content_format, is_pinned, created_at, updated_at)
+          VALUES (?, ?, 'Verify Cornell note', 'cornell', ?, ?, ?, ?, ?, ?,
+                  'quill_delta_v1', 0, ?, ?)`,
+    args: [
+      newId(),
+      userId,
+      "Structured notes column",
+      JSON.stringify({
+        ops: [
+          { insert: "Structured", attributes: { bold: true } },
+          { insert: " notes column\n" },
+        ],
+      }),
+      "Key cue",
+      JSON.stringify({
+        ops: [{ insert: "Key cue", attributes: { underline: true } }, { insert: "\n" }],
+      }),
+      "Short summary",
+      JSON.stringify({
+        ops: [{ insert: "Short summary\n", attributes: { italic: true } }],
+      }),
+      now,
+      now,
+    ],
+  });
 
   // Create a habit + 2 logs
   const habitId = newId();

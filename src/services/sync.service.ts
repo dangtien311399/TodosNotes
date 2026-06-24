@@ -16,6 +16,9 @@ import { fromSyncEntity } from "../sync/sync-serializer.js";
 import type { SyncOp } from "../schemas/api/sync.js";
 import * as habitsRepo from "../repositories/habits.js";
 import * as todosRepo from "../repositories/todos.js";
+import * as notesRepo from "../repositories/notes.js";
+import * as todosService from "./todos.js";
+import * as notesService from "./notes.js";
 import { autoLogHabitForCompletedTodo } from "./todo-habit-logs.js";
 import {
   getEntityInfo,
@@ -35,6 +38,16 @@ const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
 
 const TODO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const todoDeleteScope = (
+  payload: Record<string, unknown>
+): todosRepo.TodoDeleteScope | null => {
+  const raw = payload.delete_scope ?? payload.scope ?? "this";
+  if (raw === "this") return "this";
+  if (raw === "future" || raw === "this_and_future") return "future";
+  if (raw === "all") return "all";
+  return null;
+};
 
 // ── Result type ───────────────────────────────────────────────────────────────
 
@@ -113,6 +126,14 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
     if (!habit) return { id, status: "error", error: "invalid_habit" };
   }
 
+  const deleteScope =
+    type === "todo" && opType === "delete"
+      ? todoDeleteScope(payload)
+      : "this";
+  if (deleteScope === null) {
+    return { id, status: "error", error: "bad_input" };
+  }
+
   // ── §5.3 Strip server-only fields + convert booleans ─────────────────────
   // fromSyncEntity does NOT strip junction fields (tag_ids, note_links, etc.)
   // so we can pass the original `payload` to reconcileJunctions later.
@@ -150,6 +171,34 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
       if (entityInfo.user_id !== userId) {
         return { id, status: "error", error: "forbidden" };
       }
+    }
+  }
+
+  if (type === "note" && opType !== "delete") {
+    const currentNote =
+      entityInfo === null
+        ? null
+        : await notesRepo.getNoteById(id);
+    try {
+      const normalizedContent = notesService.normalizeSyncNoteContent(
+        currentNote,
+        payload
+      );
+      Object.assign(
+        dbPayload,
+        fromSyncEntity(
+          normalizedContent as unknown as Record<string, unknown>,
+          "note"
+        )
+      );
+    } catch (e) {
+      if (
+        e instanceof notesService.ServiceError &&
+        e.code === "bad_input"
+      ) {
+        return { id, status: "error", error: "bad_input" };
+      }
+      throw e;
     }
   }
 
@@ -239,7 +288,21 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
 
   if (opType === "delete") {
     const delAt = (payload.deleted_at as string | undefined) ?? nowISO();
-    await softDeleteEntity(type, id, delAt);
+    if (type === "todo") {
+      try {
+        await todosService.deleteTodo(userId, id, deleteScope, delAt);
+      } catch (e) {
+        if (
+          e instanceof todosService.ServiceError &&
+          e.code === "not_found"
+        ) {
+          return { id, status: "applied" };
+        }
+        throw e;
+      }
+    } else {
+      await softDeleteEntity(type, id, delAt);
+    }
   } else {
     await upsertEntity(userId, type, dbPayload, {
       partialUpdate: opType === "update" && entityInfo !== null,
