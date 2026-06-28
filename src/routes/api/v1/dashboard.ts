@@ -3,6 +3,7 @@ import {
   TodayQuerySchema,
   EisenhowerQuerySchema,
   CalendarOverviewQuerySchema,
+  CalendarDayDetailQuerySchema,
 } from "../../../schemas/api/dashboard.js";
 import * as dashboard from "../../../services/dashboard.js";
 
@@ -27,6 +28,16 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         .send({ error: "bad_input", issues: parsed.error.issues });
     }
     return dashboard.getEisenhower(req.userId, parsed.data);
+  });
+
+  app.get("/calendar/day", async (req, reply) => {
+    const parsed = CalendarDayDetailQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "bad_input", issues: parsed.error.issues });
+    }
+    return dashboard.getCalendarDayDetail(req.userId, parsed.data);
   });
 
   app.get("/calendar", async (req, reply) => {

@@ -21,3 +21,10 @@ export const CalendarOverviewQuerySchema = z
     "range invalid or > 60 days"
   );
 export type CalendarOverviewQueryInput = z.infer<typeof CalendarOverviewQuerySchema>;
+
+export const CalendarDayDetailQuerySchema = z.object({
+  date: IsoDate,
+});
+export type CalendarDayDetailQueryInput = z.infer<
+  typeof CalendarDayDetailQuerySchema
+>;

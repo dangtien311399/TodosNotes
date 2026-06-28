@@ -179,6 +179,48 @@ test("free note stores Quill Delta and derives searchable plain text", async () 
   assert.equal(raw.body_delta, JSON.stringify(notesDelta));
 });
 
+test("inline link can store arbitrary text and blank link values are removed", async () => {
+  const meaningDelta = {
+    ops: [
+      {
+        insert: "abandon",
+        attributes: { link: "bo roi; tu bo", bold: true },
+      },
+      { insert: " without link", attributes: { link: "" } },
+      { insert: " cleared", attributes: { link: null, italic: true } },
+      { insert: " false link", attributes: { link: false } },
+      { insert: "\n" },
+    ],
+  };
+
+  const parsed = CreateNoteSchema.safeParse({
+    title: "Vocabulary note",
+    type: "free",
+    body_delta: meaningDelta,
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+
+  const { note } = await notesService.createNote(USER_ID, parsed.data);
+
+  assert.deepEqual(note.body_delta, {
+    ops: [
+      {
+        insert: "abandon",
+        attributes: { link: "bo roi; tu bo", bold: true },
+      },
+      { insert: " without link" },
+      { insert: " cleared", attributes: { italic: true } },
+      { insert: " false link" },
+      { insert: "\n" },
+    ],
+  });
+  assert.equal(note.body, "abandon without link cleared false link");
+
+  const raw = await getRawNote(note.id);
+  assert.equal(raw.body_delta, JSON.stringify(note.body_delta));
+});
+
 test("Cornell note keeps independent Notes, Cues and Summary Delta documents", async () => {
   const parsed = CreateNoteSchema.safeParse({
     title: "Cornell lesson",
@@ -199,6 +241,29 @@ test("Cornell note keeps independent Notes, Cues and Summary Delta documents", a
   assert.deepEqual(note.body_delta, notesDelta);
   assert.deepEqual(note.cornell_cue_delta, cueDelta);
   assert.deepEqual(note.cornell_summary_delta, summaryDelta);
+});
+
+test("Cornell note can be created with only the Notes Column", async () => {
+  const parsed = CreateNoteSchema.safeParse({
+    title: "Cornell draft",
+    type: "cornell",
+    body_delta: notesDelta,
+    cornell_cue: null,
+    cornell_summary: null,
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+
+  const { note } = await notesService.createNote(USER_ID, parsed.data);
+
+  assert.equal(note.type, "cornell");
+  assert.equal(note.body, "Important concept");
+  assert.deepEqual(note.body_delta, notesDelta);
+  assert.equal(note.cornell_cue, null);
+  assert.equal(note.cornell_cue_delta, null);
+  assert.equal(note.cornell_summary, null);
+  assert.equal(note.cornell_summary_delta, null);
+  assert.equal(note.content_format, "quill_delta_v1");
 });
 
 test("formatted Delta content remains searchable through the plain-text FTS mirror", async () => {
@@ -265,17 +330,15 @@ test("partial Cornell edits preserve untouched formatting and plain edits invali
   assert.equal(afterPlainEdit.content_format, "quill_delta_v1");
 });
 
-test("Cornell validation rejects missing areas and invalid Quill operations", async () => {
+test("Cornell sections remain optional while invalid Quill operations are rejected", async () => {
   assert.equal(
     CreateNoteSchema.safeParse({
       title: "Incomplete Cornell",
       type: "cornell",
       body_delta: notesDelta,
-      cornell_cue_delta: cueDelta,
     }).success,
-    false
+    true
   );
-
   assert.equal(
     CreateNoteSchema.safeParse({
       title: "Invalid Delta",
@@ -284,6 +347,41 @@ test("Cornell validation rejects missing areas and invalid Quill operations", as
     }).success,
     false
   );
+});
+
+test("Cornell cues and summary can be cleared or omitted during updates", async () => {
+  const created = CreateNoteSchema.parse({
+    title: "Cornell sections",
+    type: "cornell",
+    body_delta: notesDelta,
+    cornell_cue_delta: cueDelta,
+    cornell_summary_delta: summaryDelta,
+  });
+  const { note } = await notesService.createNote(USER_ID, created);
+
+  const cleared = await notesService.updateNote(
+    USER_ID,
+    note.id,
+    UpdateNoteSchema.parse({
+      cornell_cue: null,
+      cornell_summary: null,
+    })
+  );
+  assert.equal(cleared.type, "cornell");
+  assert.equal(cleared.cornell_cue, null);
+  assert.equal(cleared.cornell_cue_delta, null);
+  assert.equal(cleared.cornell_summary, null);
+  assert.equal(cleared.cornell_summary_delta, null);
+  assert.deepEqual(cleared.body_delta, notesDelta);
+
+  const bodyOnlyEdit = await notesService.updateNote(
+    USER_ID,
+    note.id,
+    UpdateNoteSchema.parse({ body: "Continue taking notes" })
+  );
+  assert.equal(bodyOnlyEdit.body, "Continue taking notes");
+  assert.equal(bodyOnlyEdit.cornell_cue, null);
+  assert.equal(bodyOnlyEdit.cornell_summary, null);
 });
 
 test("sync push and conflict payload round-trip Delta as JSON objects", async () => {
@@ -350,6 +448,35 @@ test("sync push and conflict payload round-trip Delta as JSON objects", async ()
   assert.deepEqual(payload.cornell_cue_delta, cueDelta);
   assert.deepEqual(payload.cornell_summary_delta, summaryDelta);
   assert.equal(payload.content_format, "quill_delta_v1");
+});
+
+test("sync push accepts a Cornell note without cues or summary", async () => {
+  const result = await syncService.processPush(USER_ID, [
+    {
+      op: "create",
+      type: "note",
+      payload: {
+        id: "sync-cornell-draft",
+        title: "Synced Cornell draft",
+        type: "cornell",
+        body_delta: notesDelta,
+        cornell_cue: null,
+        cornell_summary: null,
+        is_pinned: false,
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+      },
+    },
+  ]);
+
+  assert.deepEqual(result, [
+    { id: "sync-cornell-draft", status: "applied" },
+  ]);
+  const raw = await getRawNote("sync-cornell-draft");
+  assert.equal(raw.type, "cornell");
+  assert.equal(raw.body, "Important concept");
+  assert.equal(raw.cornell_cue, null);
+  assert.equal(raw.cornell_summary, null);
 });
 
 test("sync rejects malformed Delta without changing the note", async () => {

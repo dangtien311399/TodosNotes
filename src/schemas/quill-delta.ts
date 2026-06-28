@@ -9,12 +9,36 @@ const QuillEmbedSchema = z
     message: "Quill embed insert must contain exactly one key",
   });
 
+const isBlankLinkValue = (value: unknown): boolean =>
+  value === null ||
+  value === undefined ||
+  value === false ||
+  (typeof value === "string" && value.trim() === "");
+
+const normalizeAttributes = (
+  attributes: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined => {
+  if (!attributes) return undefined;
+  const normalized = { ...attributes };
+  if (
+    Object.prototype.hasOwnProperty.call(normalized, "link") &&
+    isBlankLinkValue(normalized.link)
+  ) {
+    delete normalized.link;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 export const QuillDeltaOperationSchema = z
   .object({
     insert: z.union([z.string(), QuillEmbedSchema]),
     attributes: z.record(z.string().min(1), z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .transform((operation) => {
+    const attributes = normalizeAttributes(operation.attributes);
+    return attributes ? { ...operation, attributes } : { insert: operation.insert };
+  });
 
 export const QuillDeltaSchema = z
   .object({

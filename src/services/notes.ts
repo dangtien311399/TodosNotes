@@ -110,8 +110,6 @@ const normalizeNoteContent = (
   if (type === "free") {
     cue = { plain: null, delta: null };
     summary = { plain: null, delta: null };
-  } else if (!cue.plain?.trim() || !summary.plain?.trim()) {
-    throw new ServiceError("bad_input");
   }
 
   const contentFormat: notesRepo.NoteContentFormat =

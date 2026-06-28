@@ -36,35 +36,10 @@ const Cornell = Base.extend({
   type: z.literal("cornell"),
   body: z.string().max(100_000).optional(),
   body_delta: BodyDeltaSchema.nullable().optional(),
-  cornell_cue: z.string().trim().max(10_000).optional(),
+  cornell_cue: z.string().trim().max(10_000).nullable().optional(),
   cornell_cue_delta: CornellDeltaSchema.nullable().optional(),
-  cornell_summary: z.string().trim().max(10_000).optional(),
+  cornell_summary: z.string().trim().max(10_000).nullable().optional(),
   cornell_summary_delta: CornellDeltaSchema.nullable().optional(),
-}).superRefine((data, ctx) => {
-  const cueText =
-    data.cornell_cue_delta !== null && data.cornell_cue_delta !== undefined
-      ? quillDeltaToPlainText(data.cornell_cue_delta)
-      : data.cornell_cue;
-  const summaryText =
-    data.cornell_summary_delta !== null &&
-    data.cornell_summary_delta !== undefined
-      ? quillDeltaToPlainText(data.cornell_summary_delta)
-      : data.cornell_summary;
-
-  if (!cueText?.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["cornell_cue"],
-      message: "Cornell notes require a non-empty Cues Column",
-    });
-  }
-  if (!summaryText?.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["cornell_summary"],
-      message: "Cornell notes require a non-empty Summary Area",
-    });
-  }
 });
 
 export const CreateNoteSchema = z.discriminatedUnion("type", [Free, Cornell]);
