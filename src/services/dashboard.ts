@@ -1,5 +1,6 @@
 import * as dashRepo from "../repositories/dashboard.js";
 import * as usersRepo from "../repositories/users.js";
+import * as dailyTodoLogs from "./daily-todo-logs.js";
 import {
   listDayTopLevel,
   listTagsForTodoIds,
@@ -12,71 +13,19 @@ import {
   getLocalNowParts,
   isoWeekday,
   startOfIsoWeek,
-  todayDate,
 } from "../utils/time.js";
 import type { TagRow } from "../repositories/tags.js";
+import {
+  computeScore,
+  quadrantOf,
+  type Quadrant,
+} from "./dashboard-scoring.js";
 import type {
   TodayQueryInput,
   CalendarDayDetailQueryInput,
   CalendarOverviewQueryInput,
   EisenhowerQueryInput,
 } from "../schemas/api/dashboard.js";
-
-// ============================================================
-// Score formula (flat todo base + mark bonuses)
-// ============================================================
-
-const SCORE_BASE = 100;
-const TODO_BONUS = { FROG: 10, IMPORTANT: 5 };
-
-type Quadrant = "q1" | "q2" | "q3" | "q4";
-
-const quadrantOf = (
-  imp: number | null,
-  urg: number | null
-): Quadrant => {
-  // Dashboard/mobile contract is a strict 4-cell Eisenhower matrix.
-  // Old/unclassified rows are treated as Q4 instead of producing a fifth bucket.
-  if (imp === null || urg === null) return "q4";
-  if (imp === 1 && urg === 1) return "q1";
-  if (imp === 1 && urg === 0) return "q2";
-  if (imp === 0 && urg === 1) return "q3";
-  return "q4";
-};
-
-const isFrogForDate = (t: dashRepo.DayTodoStat, date: string): boolean =>
-  t.is_frog === 1 && t.frog_date === date;
-
-const isScoredTodo = (t: dashRepo.DayTodoStat, date: string): boolean =>
-  t.is_important === 1 || t.is_urgent === 1 || isFrogForDate(t, date);
-
-const completedTodoScore = (
-  t: dashRepo.DayTodoStat,
-  date: string,
-  baseScore: number
-): number => {
-  if (t.status !== "done") return 0;
-  return (
-    baseScore +
-    (isFrogForDate(t, date) ? TODO_BONUS.FROG : 0) +
-    (t.is_important === 1 ? TODO_BONUS.IMPORTANT : 0)
-  );
-};
-
-const computeScore = (
-  todos: dashRepo.DayTodoStat[],
-  date: string
-): number => {
-  const scoredTodos = todos.filter((t) => isScoredTodo(t, date));
-  if (scoredTodos.length === 0) return 0;
-
-  const baseScore = SCORE_BASE / scoredTodos.length;
-  const score = scoredTodos.reduce(
-    (sum, t) => sum + completedTodoScore(t, date, baseScore),
-    0
-  );
-  return Math.round(score);
-};
 
 // ============================================================
 // GET /today
@@ -98,18 +47,48 @@ export type TodayStats = {
 
 export const getTodayStats = async (
   userId: string,
-  query: TodayQueryInput
+  query: TodayQueryInput,
+  now: Date = new Date()
 ): Promise<TodayStats> => {
-  const date = query.date ?? todayDate();
-  const [todos, habits, frog] = await Promise.all([
-    dashRepo.listDayTopLevelStats(userId, date),
+  const date = query.date ?? dailyTodoLogs.vietnamToday(now);
+  const isClosedDay = dailyTodoLogs.isClosedTodoDate(date, now);
+  const [habits, liveFrog] = await Promise.all([
     dashRepo.countDayHabits(userId, date),
-    dashRepo.getFrogForDay(userId, date),
+    isClosedDay ? Promise.resolve(null) : dashRepo.getFrogForDay(userId, date),
   ]);
 
+  const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
+
+  if (isClosedDay) {
+    const summary = await dailyTodoLogs.ensureUserTodoDayClosed(
+      userId,
+      date,
+      now
+    );
+    const logs = await dailyTodoLogs.listDailyTodoLogs(userId, date);
+    for (const t of logs) {
+      if (t.completed === 1) continue;
+      counts[quadrantOf(t.is_important, t.is_urgent)]++;
+    }
+    const frogLog = logs.find((t) => t.is_frog === 1 && t.frog_date === date);
+    return {
+      date,
+      score: summary?.score ?? 0,
+      todos: {
+        total: summary?.total_todos ?? logs.length,
+        done: summary?.done_todos ?? logs.filter((t) => t.completed === 1).length,
+      },
+      eisenhower_counts: counts,
+      habits_today: habits,
+      frog: frogLog
+        ? { id: frogLog.todo_id, title: frogLog.title, status: frogLog.status }
+        : null,
+    };
+  }
+
+  const todos = await dashRepo.listDayTopLevelStats(userId, date);
   const score = computeScore(todos, date);
 
-  const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
   for (const t of todos) {
     if (t.status === "done") continue;
     counts[quadrantOf(t.is_important, t.is_urgent)]++;
@@ -124,7 +103,7 @@ export const getTodayStats = async (
     },
     eisenhower_counts: counts,
     habits_today: habits,
-    frog,
+    frog: liveFrog,
   };
 };
 
@@ -175,16 +154,36 @@ const toEisenhowerTodo = (
   };
 };
 
+const toLoggedEisenhowerTodo = (
+  t: dailyTodoLogs.DailyTodoLog
+): EisenhowerTodo => {
+  const quadrant = quadrantOf(t.is_important, t.is_urgent);
+  return {
+    id: t.todo_id,
+    title: t.title,
+    status: t.status,
+    scheduled_date: t.log_date,
+    time: t.time,
+    is_important: t.is_important === 1,
+    is_urgent: t.is_urgent === 1,
+    is_frog: t.is_frog === 1,
+    frog_date: t.frog_date,
+    quadrant,
+    tags: [],
+    tag_ids: [],
+  };
+};
+
 export const getEisenhower = async (
   userId: string,
-  query: EisenhowerQueryInput
+  query: EisenhowerQueryInput,
+  now: Date = new Date()
 ): Promise<{
   date: string;
   counts: TodayStats["eisenhower_counts"];
   by_quadrant: EisenhowerByQuadrant;
 }> => {
-  const date = query.date ?? todayDate();
-  const todos = await dashRepo.listDayTopLevelStats(userId, date);
+  const date = query.date ?? dailyTodoLogs.vietnamToday(now);
   const by_quadrant: EisenhowerByQuadrant = {
     q1: [],
     q2: [],
@@ -192,6 +191,20 @@ export const getEisenhower = async (
     q4: [],
   };
   const counts = { q1: 0, q2: 0, q3: 0, q4: 0 };
+
+  if (dailyTodoLogs.isClosedTodoDate(date, now)) {
+    await dailyTodoLogs.ensureUserTodoDayClosed(userId, date, now);
+    const logs = await dailyTodoLogs.listDailyTodoLogs(userId, date);
+    for (const t of logs) {
+      if (t.completed === 1) continue;
+      const q = quadrantOf(t.is_important, t.is_urgent);
+      by_quadrant[q].push(toLoggedEisenhowerTodo(t));
+      counts[q]++;
+    }
+    return { date, counts, by_quadrant };
+  }
+
+  const todos = await dashRepo.listDayTopLevelStats(userId, date);
   const tagMap = await listTagsForTodoIds(todos.map((todo) => todo.id));
   for (const t of todos) {
     if (t.status === "done") continue;
@@ -228,6 +241,11 @@ const hourMarkLabel = (minuteOfDay: number): string => {
 
 export type CalendarTimelineTodo = {
   id: string;
+  source: "live" | "daily_log";
+  is_daily_log: boolean;
+  log_id: string | null;
+  todo_id: string;
+  locked_completed: boolean | null;
   user_id: string;
   parent_id: string | null;
   title: string;
@@ -312,6 +330,11 @@ const toCalendarTimelineTodo = (
   todo: DayTopLevelRow
 ): CalendarTimelineTodo => ({
   id: todo.id,
+  source: "live",
+  is_daily_log: false,
+  log_id: null,
+  todo_id: todo.id,
+  locked_completed: null,
   user_id: todo.user_id,
   parent_id: todo.parent_id,
   title: todo.title,
@@ -345,6 +368,48 @@ const toCalendarTimelineTodo = (
   updated_at: todo.updated_at,
 });
 
+const toLoggedCalendarTimelineTodo = (
+  todo: dailyTodoLogs.DailyTodoLog
+): CalendarTimelineTodo => ({
+  id: todo.todo_id,
+  source: "daily_log",
+  is_daily_log: true,
+  log_id: todo.id,
+  todo_id: todo.todo_id,
+  locked_completed: todo.completed === 1,
+  user_id: todo.user_id,
+  parent_id: null,
+  title: todo.title,
+  description: todo.description,
+  status: todo.status,
+  position: todo.position,
+  scheduled_date: todo.log_date,
+  time: todo.time,
+  minutes_since_midnight: todo.time ? todoTimeToMinutes(todo.time) : null,
+  estimated_minutes: todo.estimated_minutes,
+  actual_minutes: todo.actual_minutes,
+  start_at: null,
+  due_at: todo.due_at,
+  completed_at: todo.completed_at,
+  is_frog: todo.is_frog === 1,
+  frog_date: todo.frog_date,
+  is_important:
+    todo.is_important === null ? null : todo.is_important === 1,
+  is_urgent: todo.is_urgent === null ? null : todo.is_urgent === 1,
+  trigger_after_todo_id: null,
+  habit_id: null,
+  recurrence_type: null,
+  recurrence_interval: null,
+  recurrence_days_of_week: null,
+  recurrence_end_date: null,
+  recurrence_template_id: null,
+  has_subtasks: false,
+  tags: [],
+  tag_ids: [],
+  created_at: todo.todo_created_at,
+  updated_at: todo.todo_updated_at,
+});
+
 const compareCalendarTodos = (
   a: CalendarTimelineTodo,
   b: CalendarTimelineTodo
@@ -369,21 +434,45 @@ export const getCalendarDayDetail = async (
   const date = query.date;
   const weekFrom = startOfIsoWeek(date);
   const weekTo = addDays(weekFrom, 6);
+  const today = dailyTodoLogs.vietnamToday(now);
+  const closedThrough = addDays(today, -1);
 
-  const [dayRows, weekTodos, user] = await Promise.all([
-    listDayTopLevel(userId, date),
-    dashRepo.rawTodosInRange(userId, weekFrom, weekTo),
-    usersRepo.getUserById(userId),
-  ]);
+  await dailyTodoLogs.ensureUserTodoDaysClosed(userId, weekFrom, weekTo, now);
+
+  const liveWeekFrom = weekFrom < today ? today : weekFrom;
+  const closedSummaryFrom = weekFrom;
+  const closedSummaryTo = weekTo < today ? weekTo : closedThrough;
+  const isSelectedClosed = dailyTodoLogs.isClosedTodoDate(date, now);
+
+  const [dayRows, dayLogRows, weekTodos, weekSummaries, user] =
+    await Promise.all([
+      isSelectedClosed ? Promise.resolve([]) : listDayTopLevel(userId, date),
+      isSelectedClosed
+        ? dailyTodoLogs.listDailyTodoLogs(userId, date)
+        : Promise.resolve([]),
+      liveWeekFrom <= weekTo
+        ? dashRepo.rawTodosInRange(userId, liveWeekFrom, weekTo)
+        : Promise.resolve([]),
+      closedSummaryFrom <= closedSummaryTo
+        ? dailyTodoLogs.listDailyTodoSummariesInRange(
+            userId,
+            closedSummaryFrom,
+            closedSummaryTo
+          )
+        : Promise.resolve([]),
+      usersRepo.getUserById(userId),
+    ]);
 
   const nowParts = getLocalNowParts(user?.timezone ?? DEFAULT_TIME_ZONE, now);
   const currentMinutes = nowParts.hour * 60 + nowParts.minute;
   const visibleCurrentLine = date === nowParts.date;
   const hiddenHourMarkMinute = Math.round(currentMinutes / 60) * 60;
 
-  const todos = dayRows
-    .filter((todo) => todo.status !== "archived")
-    .map(toCalendarTimelineTodo);
+  const todos = isSelectedClosed
+    ? dayLogRows.map(toLoggedCalendarTimelineTodo)
+    : dayRows
+        .filter((todo) => todo.status !== "archived")
+        .map(toCalendarTimelineTodo);
   const timedTodos = todos
     .filter((todo) => todo.time !== null)
     .sort(compareTimedCalendarTodos);
@@ -397,6 +486,15 @@ export const getCalendarDayDetail = async (
   > = {};
   for (const d of daysInRange(weekFrom, weekTo)) {
     weekCounts[d] = { total_todos: 0, timed_todos: 0, done_todos: 0 };
+  }
+  for (const summary of weekSummaries) {
+    if (!weekCounts[summary.log_date]) continue;
+    const logs = await dailyTodoLogs.listDailyTodoLogs(userId, summary.log_date);
+    weekCounts[summary.log_date] = {
+      total_todos: summary.total_todos,
+      timed_todos: logs.filter((todo) => todo.time !== null).length,
+      done_todos: summary.done_todos,
+    };
   }
   for (const todo of weekTodos) {
     if (!todo.scheduled_date || !weekCounts[todo.scheduled_date]) continue;
@@ -481,9 +579,11 @@ export type CalendarOverview = {
 
 export const getCalendarOverview = async (
   userId: string,
-  query: CalendarOverviewQueryInput
+  query: CalendarOverviewQueryInput,
+  now: Date = new Date()
 ): Promise<CalendarOverview> => {
-  const today = todayDate();
+  const today = dailyTodoLogs.vietnamToday(now);
+  const closedThrough = addDays(today, -1);
   const days: Record<string, CalendarDay> = {};
   for (const d of daysInRange(query.from, query.to)) {
     days[d] = {
@@ -494,13 +594,40 @@ export const getCalendarOverview = async (
     };
   }
 
+  await dailyTodoLogs.ensureUserTodoDaysClosed(
+    userId,
+    query.from,
+    query.to,
+    now
+  );
+
+  const liveFrom = query.from < today ? today : query.from;
+  const summaryTo = query.to < today ? query.to : closedThrough;
   const [todos, habits, logs] = await Promise.all([
-    dashRepo.rawTodosInRange(userId, query.from, query.to),
+    liveFrom <= query.to
+      ? dashRepo.rawTodosInRange(userId, liveFrom, query.to)
+      : Promise.resolve([]),
     dashRepo.activeHabitsInRange(userId, query.from, query.to),
     dashRepo.allLogsInRange(userId, query.from, query.to),
   ]);
+  const dailySummaries =
+    query.from <= summaryTo
+      ? await dailyTodoLogs.listDailyTodoSummariesInRange(
+          userId,
+          query.from,
+          summaryTo
+        )
+      : [];
 
-  // Todos
+  // Closed todo days are immutable snapshots.
+  for (const summary of dailySummaries) {
+    if (!days[summary.log_date]) continue;
+    days[summary.log_date].total_todos = summary.total_todos;
+    days[summary.log_date].done_todos = summary.done_todos;
+    days[summary.log_date].score = summary.score;
+  }
+
+  // Live todos for today/future.
   const todosByDay: Record<string, dashRepo.DayTodoStat[]> = {};
   for (const t of todos) {
     if (!t.scheduled_date || !days[t.scheduled_date]) continue;
@@ -527,7 +654,7 @@ export const getCalendarOverview = async (
   }
 
   for (const d of Object.keys(days)) {
-    if (d <= today) {
+    if (d === today) {
       days[d].score = computeScore(todosByDay[d] ?? [], d);
     }
   }

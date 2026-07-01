@@ -20,6 +20,7 @@ import * as notesRepo from "../repositories/notes.js";
 import * as todosService from "./todos.js";
 import * as notesService from "./notes.js";
 import { autoLogHabitForCompletedTodo } from "./todo-habit-logs.js";
+import { ensurePastTodoDayClosedForMutation } from "./daily-todo-logs.js";
 import {
   getEntityInfo,
   isSystemTemplate,
@@ -271,6 +272,17 @@ async function processOp(userId: string, op: SyncOp): Promise<OpResult> {
       : null;
 
   if (type === "todo" && opType !== "delete") {
+    await ensurePastTodoDayClosedForMutation(
+      userId,
+      beforeTodo?.scheduled_date
+    );
+    if (hasOwn(dbPayload, "scheduled_date")) {
+      await ensurePastTodoDayClosedForMutation(
+        userId,
+        (dbPayload.scheduled_date as string | null) ?? null
+      );
+    }
+
     const finalParentId = hasOwn(dbPayload, "parent_id")
       ? (dbPayload.parent_id as string | null) ?? null
       : beforeTodo?.parent_id ?? null;

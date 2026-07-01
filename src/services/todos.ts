@@ -2,6 +2,7 @@ import * as todosRepo from "../repositories/todos.js";
 import * as tagsRepo from "../repositories/tags.js";
 import { addDays } from "../utils/time.js";
 import { autoLogHabitForCompletedTodo } from "./todo-habit-logs.js";
+import { ensurePastTodoDayClosedForMutation } from "./daily-todo-logs.js";
 import type {
   CreateTodoInput,
   UpdateTodoInput,
@@ -164,6 +165,11 @@ export const createTodo = async (
   userId: string,
   input: CreateTodoInput
 ): Promise<todosRepo.TodoWithRelations> => {
+  await ensurePastTodoDayClosedForMutation(
+    userId,
+    input.scheduled_date ?? null
+  );
+
   let todo: todosRepo.TodoRow;
   try {
     todo = await todosRepo.createTodo({
@@ -251,6 +257,16 @@ export const updateTodo = async (
   const { tags, tag_ids, ...todoPatch } = patch;
   const shouldReplaceTags = tags !== undefined || tag_ids !== undefined;
   try {
+    const before = await todosRepo.getTodoByIdScoped(id, userId);
+    if (!before) throw new ServiceError("not_found");
+    await ensurePastTodoDayClosedForMutation(userId, before.scheduled_date);
+    if (todoPatch.scheduled_date !== undefined) {
+      await ensurePastTodoDayClosedForMutation(
+        userId,
+        todoPatch.scheduled_date
+      );
+    }
+
     const row = await todosRepo.updateTodo(id, userId, todoPatch);
     if (!row) throw new ServiceError("not_found");
     if (shouldReplaceTags) {
@@ -277,6 +293,7 @@ export const deleteTodo = async (
 ): Promise<void> => {
   const source = await todosRepo.getTodoByIdScoped(id, userId);
   if (!source) throw new ServiceError("not_found");
+  await ensurePastTodoDayClosedForMutation(userId, source.scheduled_date);
 
   try {
     const result = await todosRepo.softDeleteTodoByScope(
@@ -308,6 +325,10 @@ export const completeTodo = async (
   triggered_todos: todosRepo.TodoRow[];
   next_recurring_todo: todosRepo.TodoRow | null;
 }> => {
+  const before = await todosRepo.getTodoByIdScoped(id, userId);
+  if (!before) throw new ServiceError("not_found");
+  await ensurePastTodoDayClosedForMutation(userId, before.scheduled_date);
+
   const result = await todosRepo.completeTodo(id, userId, body.actual_minutes);
   if (!result) throw new ServiceError("not_found");
   const { todo, completedNow } = result;
@@ -326,6 +347,10 @@ export const uncompleteTodo = async (
   userId: string,
   id: string
 ): Promise<todosRepo.TodoRow> => {
+  const before = await todosRepo.getTodoByIdScoped(id, userId);
+  if (!before) throw new ServiceError("not_found");
+  await ensurePastTodoDayClosedForMutation(userId, before.scheduled_date);
+
   const todo = await todosRepo.uncompleteTodo(id, userId);
   if (!todo) throw new ServiceError("not_found");
   return todo;
@@ -371,6 +396,11 @@ export const moveToDay = async (
   body: MoveToDayInput
 ): Promise<todosRepo.TodoRow> => {
   try {
+    const before = await todosRepo.getTodoByIdScoped(id, userId);
+    if (!before) throw new ServiceError("not_found");
+    await ensurePastTodoDayClosedForMutation(userId, before.scheduled_date);
+    await ensurePastTodoDayClosedForMutation(userId, body.date);
+
     const row = await todosRepo.updateTodo(id, userId, {
       scheduled_date: body.date,
       ...(body.date === null ? { time: null } : {}),

@@ -26,3 +26,9 @@ export const getVietnamNowParts = (now: Date = new Date()): VietnamNowParts => {
     minute,
   };
 };
+
+export const vietnamDateFromISO = (iso: string): string | null => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return getVietnamNowParts(date).date;
+};

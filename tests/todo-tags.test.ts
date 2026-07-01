@@ -11,6 +11,9 @@ const dashboard = await import("../src/services/dashboard.js");
 const { processPush } = await import("../src/services/sync.service.js");
 const { getChangesSince } = await import("../src/repositories/sync.repo.js");
 const { newId } = await import("../src/utils/id.js");
+const { createDailyTodoLogTables, clearDailyTodoLogTables } = await import(
+  "./helpers/daily-todo-log-tables.js"
+);
 
 const USER_ID = "33333333-3333-7333-8333-333333333333";
 const OTHER_USER_ID = "44444444-4444-7444-8444-444444444444";
@@ -278,9 +281,11 @@ before(async () => {
       deleted_at TEXT
     )
   `);
+  await createDailyTodoLogTables(turso);
 });
 
 beforeEach(async () => {
+  await clearDailyTodoLogTables(turso);
   for (const table of [
     "checklist_run_items",
     "checklist_runs",
@@ -407,12 +412,13 @@ test("dashboard eisenhower returns tags and tag_ids on todo items", async () => 
   const todoId = newId();
   await insertTodo(todoId, {
     title: "Dashboard todo",
+    scheduled_date: "2099-01-10",
     is_important: 1,
     is_urgent: 1,
   });
   await todosService.replaceTags(USER_ID, todoId, { tag_ids: [tag.tag.id] });
 
-  const result = await dashboard.getEisenhower(USER_ID, { date: "2026-01-10" });
+  const result = await dashboard.getEisenhower(USER_ID, { date: "2099-01-10" });
 
   assert.equal(result.by_quadrant.q1.length, 1);
   assert.deepEqual(result.by_quadrant.q1[0].tag_ids, [tag.tag.id]);

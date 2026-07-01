@@ -8,6 +8,9 @@ const { turso } = await import("../src/config/db.js");
 const todosService = await import("../src/services/todos.js");
 const { processPush } = await import("../src/services/sync.service.js");
 const { getChangesSince } = await import("../src/repositories/sync.repo.js");
+const { createDailyTodoLogTables, clearDailyTodoLogTables } = await import(
+  "./helpers/daily-todo-log-tables.js"
+);
 
 const USER_ID = "55555555-5555-7555-8555-555555555555";
 const OTHER_USER_ID = "66666666-6666-7666-8666-666666666666";
@@ -300,9 +303,11 @@ before(async () => {
       deleted_at TEXT
     )
   `);
+  await createDailyTodoLogTables(turso);
 });
 
 beforeEach(async () => {
+  await clearDailyTodoLogTables(turso);
   for (const table of [
     "checklist_run_items",
     "checklist_runs",

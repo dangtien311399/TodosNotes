@@ -6,6 +6,9 @@ process.env.TURSO_AUTH_TOKEN = "";
 
 const { turso } = await import("../src/config/db.js");
 const dashboard = await import("../src/services/dashboard.js");
+const { createDailyTodoLogTables, clearDailyTodoLogTables } = await import(
+  "./helpers/daily-todo-log-tables.js"
+);
 const { CalendarDayDetailQuerySchema } = await import(
   "../src/schemas/api/dashboard.js"
 );
@@ -146,9 +149,11 @@ before(async () => {
       PRIMARY KEY (todo_id, tag_id)
     )
   `);
+  await createDailyTodoLogTables(turso);
 });
 
 beforeEach(async () => {
+  await clearDailyTodoLogTables(turso);
   await turso.execute("DELETE FROM todo_tags");
   await turso.execute("DELETE FROM tags");
   await turso.execute("DELETE FROM todos");

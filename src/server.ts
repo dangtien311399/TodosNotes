@@ -10,6 +10,7 @@ import adminRoutes from "./routes/admin/index.js";
 import apiRoutes from "./routes/api/v1/index.js";
 import notificationRoutes from "./routes/api/notifications.js";
 import { startNotificationScheduler } from "./services/notification-scheduler.js";
+import { startDailyTodoLogScheduler } from "./services/daily-todo-log-scheduler.js";
 
 const app: FastifyInstance = Fastify({
   logger: {
@@ -81,6 +82,7 @@ await app.register(apiRoutes, { prefix: "/api/v1" });
 await app.register(notificationRoutes, { prefix: "/api/notifications" });
 
 startNotificationScheduler(app.log);
+startDailyTodoLogScheduler(app.log);
 
 // Start
 try {

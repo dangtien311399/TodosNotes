@@ -9,6 +9,9 @@ const { turso } = await import("../src/config/db.js");
 const todosRepo = await import("../src/repositories/todos.js");
 const todosService = await import("../src/services/todos.js");
 const { processPush } = await import("../src/services/sync.service.js");
+const { createDailyTodoLogTables, clearDailyTodoLogTables } = await import(
+  "./helpers/daily-todo-log-tables.js"
+);
 
 const USER_ID = "user-nullable-fields";
 const OLD_UPDATED_AT = "2026-01-01T00:00:00.000Z";
@@ -171,9 +174,11 @@ before(async () => {
       PRIMARY KEY (todo_id, tag_id)
     )
   `);
+  await createDailyTodoLogTables(turso);
 });
 
 beforeEach(async () => {
+  await clearDailyTodoLogTables(turso);
   await turso.execute("DELETE FROM todo_tags");
   await turso.execute("DELETE FROM tags");
   await turso.execute("DELETE FROM todos");
